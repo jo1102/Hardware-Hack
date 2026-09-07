@@ -23,6 +23,8 @@ const Kairo = (() => {
     primed: false,    // has the first frame been absorbed silently?
     seen:   new Set(),
     role:   "carer",
+    everConnected: false,  // has a real board ever answered?
+    startedAt: 0,
     onState: [],      // called with every new state
   };
 
@@ -341,6 +343,22 @@ const Kairo = (() => {
       await Bridge.poll();
       const s = Bridge.state();
       if (s) { App.S = s; App.at = performance.now(); }
+      if (s && s.connected) App.everConnected = true;
+
+      // Served over HTTP, so we assumed a bridge was there and went looking
+      // for one. If nothing answers in the first few seconds and the user
+      // has never picked a source themselves, fall back to the simulation
+      // rather than showing a judge an empty "No device" screen. This is
+      // what makes a GitHub Pages copy of the site presentable.
+      // Once they choose a source explicitly, this never fires again - a
+      // bridge that drops mid-demo must NOT silently become demo data.
+      if (!App.everConnected && !store.get("touchedSource", false) &&
+          Bridge.fail >= 4 && performance.now() - App.startedAt < 15000) {
+        toast("warn", "◌", "No dispenser found — showing demo data",
+              "Start site/bridge.py and pick Live device in the corner to connect one.");
+        setSource("demo");
+        return;
+      }
     }
     if (App.S) {
       watchEvents(App.S);
@@ -383,6 +401,7 @@ const Kairo = (() => {
     }
 
     App.S = Sim.state(); App.at = performance.now();
+    App.startedAt = performance.now();
     pull();
     pullTimer = setInterval(pull, rate());
     if (paint) paintTimer = setInterval(() => paint(App.S), 100);
