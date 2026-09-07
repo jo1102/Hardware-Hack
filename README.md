@@ -40,8 +40,8 @@ history - so everything runs and demos with nothing plugged in.
 ### 2. Set up, once
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/kairo.git
-cd kairo
+git clone https://github.com/jo1102/Hardware-Hack.git
+cd Hardware-Hack
 python -m pip install -r requirements.txt
 ```
 
