@@ -1,0 +1,62 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Ctrl+Shift+B runs this one: send the file you're editing to the
+      // board and execute it there. Nothing is permanently installed.
+      "label": "ESP32: Run current file",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m", "mpremote",
+        "connect", "COM3",
+        "run", "${file}"
+      ],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      // Copy the current file onto the board so it stays there after unplugging.
+      "label": "ESP32: Upload current file",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m", "mpremote",
+        "connect", "COM3",
+        "cp", "${file}", ":${fileBasename}"
+      ],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: List files on board",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "mpremote", "connect", "COM3", "fs", "ls"],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      // Interactive >>> prompt on the board. Ctrl+] exits.
+      "label": "ESP32: Open REPL",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "mpremote", "connect", "COM3", "repl"],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Known-good servo test",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m", "mpremote",
+        "connect", "COM3",
+        "run", "${workspaceFolder}/servo_min.py"
+      ],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}

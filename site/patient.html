@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- user-scalable=no on purpose: this is a fixed kiosk and a pinch-zoom
+     that a patient cannot undo is worse than no zoom at all. Everything is
+     sized in vw/vh instead, plus a bright-room mode. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Kairo — your medicine</title>
+<meta name="theme-color" content="#06080b">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%230a0e14'/><circle cx='32' cy='32' r='17' fill='none' stroke='%234fe0bd' stroke-width='6' stroke-dasharray='80 27' stroke-linecap='round' transform='rotate(-90 32 32)'/></svg>">
+<link rel="stylesheet" href="app/theme.css">
+<link rel="stylesheet" href="app/patient.css">
+</head>
+<body>
+
+<main class="kiosk" id="kiosk">
+  <div class="k-when" id="kWhen">Starting up</div>
+  <div class="k-num" id="kNum">—</div>
+  <div class="k-med" id="kMedRow" hidden><span class="sw" id="kSw"></span><span id="kMed"></span></div>
+  <p class="k-note" id="kNote">One moment.</p>
+  <div class="k-acts" id="kActs"></div>
+  <div class="k-tail" id="kTail">&nbsp;</div>
+</main>
+
+<!-- Connection state, and the only way to the carer console: press and
+     hold for a second and a bit. -->
+<div class="corner" id="corner" role="button" tabindex="-1"
+     aria-label="Press and hold to open the carer console">
+  <span class="ring"></span>
+  <span class="dot"></span>
+  <span id="cornerTxt">Starting</span>
+  <span class="hint">— keep holding for carer settings</span>
+</div>
+
+<button class="contrast-btn" id="btnHC">Bright-room colours</button>
+
+<div class="toasts" id="toasts"></div>
+<div class="sr" id="live" aria-live="assertive"></div>
+
+<script src="app/core.js"></script>
+<script src="app/device.js"></script>
+<script src="app/patient.js"></script>
+</body>
+</html>

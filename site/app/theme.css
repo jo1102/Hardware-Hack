@@ -1,0 +1,180 @@
+/* ==================================================================== *
+ * Kairo — shared design system
+ *
+ * Loaded by BOTH the carer console and the patient kiosk, so anything in
+ * here has to make sense on a laptop and on a tablet propped next to the
+ * box. Page-specific layout lives in carer.css / patient.css.
+ *
+ * No build step and no external requests by design: the site has to open
+ * off a USB stick at a venue with no internet.
+ * ==================================================================== */
+
+:root{
+  --bg:#06080b; --bg-2:#0a0e14;
+  --panel:rgba(255,255,255,.042); --panel-2:rgba(255,255,255,.022);
+  --line:rgba(255,255,255,.085); --line-2:rgba(255,255,255,.16);
+  --ink:#eaf0f7; --dim:#9aa7b8; --faint:#65728a;
+  --mint:#4fe0bd; --blue:#6aa6ff; --amber:#ffbe55; --red:#ff6f70; --violet:#a98bfa;
+
+  /* One colour per tube, used consistently everywhere a tube is named. */
+  --t1:#4fe0bd; --t2:#6aa6ff; --t3:#a98bfa;
+
+  --r:16px; --r-sm:10px;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+  --shadow:0 1px 0 rgba(255,255,255,.045) inset, 0 18px 44px -22px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+/* Author `display` rules beat the UA sheet, so a .warn{display:flex} would
+   keep showing a [hidden] element. This has to win outright. */
+[hidden]{display:none!important}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* Two very soft light sources, so the flat panels have somewhere to sit. */
+body::before{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(79,224,189,.10), transparent 62%),
+    radial-gradient(900px 560px at 92% 4%, rgba(106,166,255,.09), transparent 60%),
+    linear-gradient(180deg,#080b10,#06080b 60%);
+}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+a{color:var(--blue)}
+
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mono{font-family:var(--mono)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- brand ---------- */
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.mark{width:38px;height:38px;flex:none}
+.brand h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.4px;line-height:1.05}
+.brand .by{
+  display:block;font-size:10.5px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);margin-top:2px;
+}
+
+/* ---------- chips ---------- */
+.chip{
+  display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;
+  border:1px solid var(--line);background:var(--panel-2);font-size:12.5px;font-weight:560;
+  color:var(--dim);
+}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.chip.live{color:#bff3e6;border-color:rgba(79,224,189,.34);background:rgba(79,224,189,.09)}
+.chip.live .dot{background:var(--mint);animation:ping 2.4s infinite}
+.chip.demo{color:#ffe0b0;border-color:rgba(255,190,85,.3);background:rgba(255,190,85,.08)}
+.chip.demo .dot{background:var(--amber)}
+.chip.bad{color:#ffc9c9;border-color:rgba(255,111,112,.32);background:rgba(255,111,112,.08)}
+.chip.bad .dot{background:var(--red)}
+.chip.warn{color:#ffdca6;border-color:rgba(255,190,85,.34);background:rgba(255,190,85,.1)}
+.chip.warn .dot{background:var(--amber)}
+@keyframes ping{
+  0%{box-shadow:0 0 0 0 rgba(79,224,189,.5)}
+  70%{box-shadow:0 0 0 7px rgba(79,224,189,0)}
+  100%{box-shadow:0 0 0 0 rgba(79,224,189,0)}
+}
+
+/* ---------- cards ---------- */
+.card{
+  position:relative; padding:20px;
+  border:1px solid var(--line); border-radius:var(--r);
+  background:linear-gradient(180deg,var(--panel),var(--panel-2));
+  box-shadow:var(--shadow);
+}
+.card h2{
+  margin:0 0 2px; font-size:12px; font-weight:660; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--faint);
+}
+.card h2 + .sub{margin:0 0 16px;font-size:12.5px;color:var(--faint)}
+.card .hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+
+/* ---------- buttons ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 16px;border-radius:11px;border:1px solid var(--line-2);
+  background:rgba(255,255,255,.05);font-size:13px;font-weight:600;color:var(--ink);
+  transition:transform .12s,background .16s,border-color .16s,opacity .16s;
+}
+.btn:hover{background:rgba(255,255,255,.1)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.btn.primary{background:linear-gradient(180deg,#5ff0cd,#31c4a4);border-color:transparent;color:#04120e}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent}
+.btn.sm{padding:6px 11px;font-size:12px;border-radius:9px}
+.btn.danger{border-color:rgba(255,111,112,.4);color:#ffc9c9;background:rgba(255,111,112,.08)}
+
+/* ---------- form fields ---------- */
+input[type=text],input[type=number],input[type=time],select{
+  padding:9px 11px;border-radius:10px;border:1px solid var(--line);
+  background:rgba(0,0,0,.3);color:var(--ink);width:100%;
+}
+input:focus,select:focus,button:focus-visible{
+  outline:2px solid rgba(106,166,255,.45);outline-offset:1px;border-color:transparent;
+}
+label.fl{
+  display:block;font-size:11px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:6px;
+}
+input[type=range]{width:100%;accent-color:var(--mint)}
+
+/* ---------- notes ---------- */
+.note{
+  margin-top:12px;padding:11px 13px;border-radius:11px;font-size:12.5px;line-height:1.55;
+  background:rgba(255,190,85,.075);border:1px solid rgba(255,190,85,.22);color:#ffdca6;
+}
+.note b{color:#ffe9c9}
+.note.info{background:rgba(106,166,255,.07);border-color:rgba(106,166,255,.22);color:#c6dcff}
+.note.info b{color:#e4efff}
+
+/* ---------- the 1602 display, drawn to scale ---------- */
+.bezel{
+  padding:15px;border-radius:12px;width:100%;
+  background:linear-gradient(180deg,#1a1e26,#101319);
+  border:1px solid rgba(255,255,255,.1);
+  box-shadow:0 14px 30px -18px #000, inset 0 1px 0 rgba(255,255,255,.06);
+}
+.lcd{
+  --cw:clamp(12px,2.1vw,17px);
+  display:grid;grid-template-columns:repeat(16,var(--cw));gap:1px;
+  justify-content:center;padding:11px 9px;border-radius:4px;
+  background:#123ad2;
+  box-shadow:inset 0 0 32px rgba(0,0,0,.45), 0 0 26px -8px rgba(30,90,255,.55);
+}
+.lcd s{
+  all:unset;display:block;height:calc(var(--cw)*1.55);
+  font-family:var(--mono);font-size:calc(var(--cw)*.98);line-height:calc(var(--cw)*1.55);
+  text-align:center;color:#e8f0ff;text-shadow:0 0 7px rgba(220,235,255,.75);
+  background:rgba(255,255,255,.045);white-space:pre;
+}
+.lcd-cap{font-size:11px;color:var(--faint);letter-spacing:.05em;text-align:center}
+
+/* ---------- toasts ---------- */
+.toasts{
+  position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:80;
+  display:flex;flex-direction:column;gap:9px;width:min(430px,calc(100vw - 28px));
+}
+.toast{
+  display:flex;gap:12px;padding:13px 15px;border-radius:13px;
+  background:rgba(14,18,25,.97);border:1px solid var(--line-2);backdrop-filter:blur(14px);
+  box-shadow:0 20px 44px -20px #000;animation:drop .32s cubic-bezier(.2,.9,.2,1);
+}
+@keyframes drop{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+.toast .i{font-size:17px;line-height:1.2}
+.toast .c{flex:1;min-width:0}
+.toast b{display:block;font-size:13.5px;font-weight:620}
+.toast p{margin:2px 0 0;font-size:12.5px;color:var(--faint);line-height:1.5}
+.toast.warn{border-color:rgba(255,190,85,.4)}
+.toast.bad{border-color:rgba(255,111,112,.45)}
+.toast.good{border-color:rgba(79,224,189,.4)}
+
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.001s!important;transition-duration:.001s!important}
+}

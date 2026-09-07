@@ -1,0 +1,336 @@
+/* ==================================================================== *
+ * Kairo — the carer console
+ *
+ * Everything that involves a decision lives here: schedules, pill counts,
+ * refill alerts, the sound, the camera, the raw serial. None of it appears
+ * on the patient kiosk.
+ * ==================================================================== */
+
+.wrap{position:relative;z-index:1;max-width:1420px;margin:0 auto;padding:0 22px 64px}
+
+/* ---------- header ---------- */
+header.top{
+  position:sticky; top:0; z-index:40;
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  padding:16px 0 14px; margin-bottom:8px;
+  background:linear-gradient(180deg,rgba(6,8,11,.94),rgba(6,8,11,.62) 70%,transparent);
+  backdrop-filter:blur(14px);
+}
+nav.views{
+  display:flex;gap:2px;padding:3px;border:1px solid var(--line);
+  border-radius:12px;background:var(--panel-2);
+}
+nav.views button{
+  padding:7px 15px;border-radius:9px;font-size:13px;font-weight:560;color:var(--dim);
+  transition:background .16s,color .16s;
+}
+nav.views button:hover{color:var(--ink)}
+nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:var(--ink)}
+.top .spacer{flex:1 1 auto}
+.top .clock{font-size:13px;color:var(--dim);letter-spacing:.02em}
+.chip button{color:inherit;opacity:.65}
+.chip button:hover{opacity:1}
+.chip .badge{
+  min-width:17px;height:17px;padding:0 5px;border-radius:9px;display:grid;place-content:center;
+  background:var(--red);color:#2a0000;font-size:10.5px;font-weight:750;
+}
+
+/* ---------- grid ---------- */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.grid > .card{grid-column:span 12}
+.span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}
+.span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}
+@media(max-width:1080px){
+  .span3,.span4,.span5,.span6,.span7,.span8{grid-column:span 12}
+}
+#dashboard,#camera,#settings{scroll-margin-top:88px}
+#camera,#settings{display:none}
+#camera.on,#settings.on{display:grid}
+
+/* ==================================================================== *
+ * ALERTS — the thing that tells the carer to act
+ * ==================================================================== */
+.alerts{grid-column:span 12}
+.alerts.calm{border-color:rgba(79,224,189,.22)}
+.alerts.hot{border-color:rgba(255,190,85,.4)}
+.alerts.bad{border-color:rgba(255,111,112,.45)}
+.alert-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.alert{
+  display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:13px;
+  border:1px solid var(--line);background:var(--panel-2);
+}
+.alert.sev-warn{border-color:rgba(255,190,85,.32);background:rgba(255,190,85,.06)}
+.alert.sev-bad{border-color:rgba(255,111,112,.34);background:rgba(255,111,112,.06)}
+.alert .ic{
+  width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-content:center;
+  font-size:16px;background:rgba(255,255,255,.06);
+}
+.alert.sev-warn .ic{background:rgba(255,190,85,.16);color:#ffdca6}
+.alert.sev-bad .ic{background:rgba(255,111,112,.16);color:#ffc9c9}
+.alert .tx{flex:1;min-width:0}
+.alert .tx b{display:block;font-size:14px;font-weight:620}
+.alert .tx span{font-size:12.5px;color:var(--faint)}
+.alert .go{display:flex;gap:8px;flex-wrap:wrap;flex:none}
+.calm-note{
+  display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:13px;
+  background:rgba(79,224,189,.06);border:1px solid rgba(79,224,189,.2);
+  font-size:13.5px;color:#bff3e6;
+}
+.calm-note .ic{font-size:17px}
+
+/* The refill drawer that an alert opens, inline so the carer never leaves
+   the alert to act on it. */
+.refill{
+  display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;
+  margin-top:10px;padding:14px;border-radius:12px;
+  background:rgba(0,0,0,.3);border:1px solid var(--line);
+}
+.refill .f{width:120px;flex:none}
+.refill .quick{display:flex;gap:7px;flex-wrap:wrap}
+
+/* ==================================================================== *
+ * HERO — countdown
+ * ==================================================================== */
+.hero{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+.ring{position:relative;width:212px;height:212px;flex:none}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring .glow{
+  position:absolute;inset:14px;border-radius:50%;filter:blur(26px);opacity:.4;
+  background:var(--mint);transition:background .5s,opacity .5s;
+}
+.ring .face{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.ring .lab{font-size:10.5px;font-weight:660;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.ring .big{font-size:40px;font-weight:660;letter-spacing:-1.6px;line-height:1.04;margin:5px 0 2px}
+.ring .sml{font-size:12.5px;color:var(--dim)}
+.hero .meta{flex:1 1 260px;min-width:240px}
+.hero .who{font-size:12px;color:var(--faint);letter-spacing:.09em;text-transform:uppercase;font-weight:640}
+.hero .med{font-size:26px;font-weight:640;letter-spacing:-.6px;margin:6px 0 4px;display:flex;align-items:center;gap:11px}
+.hero .med .swatch{width:11px;height:11px;border-radius:50%;flex:none}
+.hero .at{color:var(--dim);font-size:13.5px}
+.hero .acts{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}
+.hero.urgent{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.93}}
+
+/* ---------- stats ---------- */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:520px){.stats{grid-template-columns:1fr 1fr}}
+.stat{padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--panel-2)}
+.stat .k{font-size:10.5px;font-weight:660;letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
+.stat .v{font-size:27px;font-weight:660;letter-spacing:-1px;margin-top:5px}
+.stat .n{font-size:11.5px;color:var(--faint);margin-top:1px}
+.days{display:flex;gap:4px;align-items:flex-end;margin-top:16px;height:44px}
+.days i{flex:1;border-radius:3px;background:rgba(255,255,255,.07);position:relative;min-width:5px}
+.days i b{position:absolute;inset:auto 0 0;border-radius:3px;display:block;transition:height .4s}
+.days-legend{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:7px}
+
+/* ==================================================================== *
+ * TUBES
+ * ==================================================================== */
+.tubes{grid-column:span 12;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:860px){.tubes{grid-template-columns:1fr}}
+.tube{
+  display:flex;gap:16px;padding:18px;
+  border:1px solid var(--line);border-radius:var(--r);
+  background:linear-gradient(180deg,var(--panel),var(--panel-2));box-shadow:var(--shadow);
+  position:relative;overflow:hidden;
+}
+.tube::after{content:"";position:absolute;inset:0 0 auto;height:2px;background:var(--tc);opacity:.75}
+.tube.low{border-color:rgba(255,190,85,.42)}
+.tube.empty{border-color:rgba(255,111,112,.45)}
+.glass{
+  width:52px;flex:none;height:172px;border-radius:26px/22px;position:relative;
+  border:1px solid var(--line-2);overflow:hidden;
+  background:linear-gradient(180deg,rgba(0,0,0,.42),rgba(0,0,0,.2));
+}
+/* The fill is drawn as stacked tablets rather than a plain bar — the
+   repeating gradient reads as pills from across a room. */
+.glass .fill{
+  position:absolute;inset:auto 3px 3px;border-radius:22px;
+  transition:height .6s cubic-bezier(.2,.7,.2,1);
+  background:
+    repeating-linear-gradient(180deg,
+      color-mix(in srgb,var(--tc) 88%, white 12%) 0 9px,
+      color-mix(in srgb,var(--tc) 62%, black 38%) 9px 13px);
+  box-shadow:0 0 22px -4px var(--tc);
+}
+.glass .shine{
+  position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(100deg,rgba(255,255,255,.16) 4%,transparent 26%,transparent 72%,rgba(255,255,255,.07) 96%);
+}
+.glass .ticks{position:absolute;inset:0;pointer-events:none}
+.glass .ticks i{position:absolute;right:0;width:8px;height:1px;background:rgba(255,255,255,.16)}
+.tube .body{flex:1;min-width:0;display:flex;flex-direction:column}
+.tube .tn{font-size:10.5px;font-weight:660;letter-spacing:.12em;text-transform:uppercase;color:var(--tc)}
+.tube .name{
+  font-size:16.5px;font-weight:620;letter-spacing:-.3px;margin:4px 0 2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tube .sched{font-size:12px;color:var(--faint)}
+.tube .count{display:flex;align-items:baseline;gap:6px;margin-top:12px}
+.tube .count b{font-size:32px;font-weight:660;letter-spacing:-1.4px}
+.tube .count span{font-size:12px;color:var(--faint)}
+.tube .runway{font-size:12px;color:var(--dim);margin-top:2px}
+.tube .servo-no{margin-top:8px;font-size:11.5px;color:#ffc9c9}
+.tube .warn{
+  margin-top:10px;padding:7px 10px;border-radius:9px;font-size:12px;font-weight:560;
+  display:flex;gap:7px;align-items:center;
+}
+.tube .warn.low{background:rgba(255,190,85,.11);color:#ffdca6;border:1px solid rgba(255,190,85,.26)}
+.tube .warn.empty{background:rgba(255,111,112,.11);color:#ffc9c9;border:1px solid rgba(255,111,112,.3)}
+.tube .acts{display:flex;gap:7px;margin-top:auto;padding-top:13px;flex-wrap:wrap}
+
+/* ==================================================================== *
+ * SCHEDULE EDITOR
+ * ==================================================================== */
+.ed{border-top:1px solid var(--line);padding:15px 0}
+.ed:first-of-type{border-top:0;padding-top:4px}
+.ed .row1{display:flex;gap:11px;align-items:flex-end;flex-wrap:wrap}
+.ed .row1 .f-name{flex:1 1 200px;min-width:150px}
+.ed .row1 .f-dose{width:96px;flex:none}
+.ed .row1 .f-count{width:112px;flex:none}
+.ed .dot{width:9px;height:9px;border-radius:50%;background:var(--tc);margin-bottom:13px;flex:none}
+.times{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.time-chip{
+  display:inline-flex;align-items:center;gap:7px;padding:6px 8px 6px 12px;border-radius:9px;
+  border:1px solid var(--line-2);background:rgba(255,255,255,.05);
+  font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
+}
+.time-chip button{color:var(--faint);font-size:15px;line-height:1;padding:0 2px}
+.time-chip button:hover{color:var(--red)}
+.times input[type=time]{width:118px}
+.ed .save{margin-top:12px;display:flex;gap:9px;align-items:center}
+.ed .saved{font-size:12px;color:var(--mint);opacity:0;transition:opacity .3s}
+.ed .saved.on{opacity:1}
+
+/* ==================================================================== *
+ * HARDWARE / LCD PANEL
+ * ==================================================================== */
+.lcd-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.hw{display:grid;gap:8px;margin-top:4px}
+.hw .p{
+  display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;
+  border:1px solid var(--line);background:var(--panel-2);font-size:13px;
+}
+.hw .p .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--faint)}
+.hw .p.ok .dot{background:var(--mint);box-shadow:0 0 9px var(--mint)}
+.hw .p.no .dot{background:var(--red)}
+.hw .p .nm{font-weight:600}
+.hw .p .pin{
+  margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--faint);
+  max-width:54%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* ==================================================================== *
+ * SOUND
+ * ==================================================================== */
+.sounds{display:grid;gap:9px}
+.sound{
+  display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:11px;
+  border:1px solid var(--line);background:var(--panel-2);cursor:pointer;
+  transition:border-color .16s,background .16s;
+}
+.sound:hover{background:rgba(255,255,255,.05)}
+.sound[aria-checked="true"]{border-color:rgba(79,224,189,.45);background:rgba(79,224,189,.07)}
+.sound .tick{
+  width:18px;height:18px;flex:none;border-radius:50%;border:1.5px solid var(--line-2);
+  display:grid;place-content:center;font-size:11px;color:#04120e;
+}
+.sound[aria-checked="true"] .tick{background:var(--mint);border-color:transparent}
+.sound .nm{font-weight:600;text-transform:capitalize}
+.sound .kd{font-size:11.5px;color:var(--faint);margin-left:auto;margin-right:4px}
+.sound.off{opacity:.45;cursor:not-allowed}
+.vol{display:flex;align-items:center;gap:13px;margin-top:16px}
+.vol .val{width:46px;text-align:right;font-variant-numeric:tabular-nums;font-weight:620}
+
+/* ==================================================================== *
+ * ACTIVITY / CONSOLE
+ * ==================================================================== */
+.log{list-style:none;margin:0;padding:0;max-height:340px;overflow:auto}
+.log li{display:flex;gap:12px;padding:10px 2px;border-bottom:1px solid rgba(255,255,255,.05)}
+.log li:last-child{border-bottom:0}
+.log .ic{
+  width:26px;height:26px;flex:none;border-radius:8px;display:grid;place-content:center;
+  font-size:13px;background:rgba(255,255,255,.06);
+}
+.log .tx{flex:1;min-width:0}
+.log .tx b{font-weight:600}
+.log .tx div{font-size:12px;color:var(--faint)}
+.log .when{font-size:12px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+.log .k-taken .ic{background:rgba(79,224,189,.15);color:var(--mint)}
+.log .k-dispensed .ic{background:rgba(106,166,255,.15);color:var(--blue)}
+.log .k-missed .ic,.log .k-empty .ic{background:rgba(255,111,112,.15);color:var(--red)}
+.log .k-low .ic,.log .k-refill .ic{background:rgba(255,190,85,.15);color:var(--amber)}
+.log .k-help .ic{background:rgba(255,111,112,.2);color:#ffc9c9}
+.log .k-tested .ic{background:rgba(255,255,255,.08);color:var(--dim)}
+.log .k-snoozed .ic,.log .k-reminded .ic{background:rgba(169,139,250,.15);color:var(--violet)}
+.empty-note{padding:22px 4px;color:var(--faint);font-size:13px;text-align:center}
+.term{
+  font-family:var(--mono);font-size:11.5px;line-height:1.65;height:250px;overflow:auto;
+  background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:11px;padding:11px;
+  white-space:pre-wrap;word-break:break-word;color:#b9c6d8;
+}
+.term .t{color:var(--faint)}
+.term .dev{color:#a8e6d6}
+.term .br{color:#a9c8ff}
+
+/* ==================================================================== *
+ * CAMERA
+ * ==================================================================== */
+.cam-frame{
+  position:relative;aspect-ratio:4/3;width:100%;max-height:min(60vh,540px);
+  border-radius:14px;overflow:hidden;background:#05070a;border:1px solid var(--line);
+  display:grid;place-items:center;
+}
+.cam-frame img{width:100%;height:100%;object-fit:cover;display:block}
+.cam-off{text-align:center;padding:26px;max-width:44ch}
+.cam-off .eye{font-size:34px;opacity:.5}
+.cam-off h3{margin:12px 0 6px;font-size:16px;font-weight:620}
+.cam-off p{margin:0;color:var(--faint);font-size:13px;line-height:1.6}
+.cam-live-badge{
+  position:absolute;top:12px;left:12px;display:flex;align-items:center;gap:7px;
+  padding:6px 11px;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);
+  font-size:11.5px;font-weight:640;letter-spacing:.08em;text-transform:uppercase;
+}
+.cam-live-badge i{width:7px;height:7px;border-radius:50%;background:var(--red);animation:ping 1.8s infinite}
+.privacy{
+  display:flex;gap:12px;padding:14px;border-radius:12px;margin-top:14px;
+  background:rgba(106,166,255,.06);border:1px solid rgba(106,166,255,.2);
+}
+.privacy .i{font-size:17px;line-height:1}
+.privacy p{margin:0;font-size:12.5px;color:#c6dcff;line-height:1.6}
+.privacy b{color:#e4efff}
+
+/* ==================================================================== *
+ * CONNECTION DRAWER
+ * ==================================================================== */
+.conn{
+  position:fixed;right:18px;bottom:18px;z-index:60;
+  width:auto;max-width:calc(100vw - 36px);
+  border:1px solid var(--line-2);border-radius:14px;overflow:hidden;
+  background:rgba(10,14,20,.96);backdrop-filter:blur(18px);
+  box-shadow:0 26px 60px -26px #000;
+}
+.conn > button.hd{
+  width:100%;display:flex;align-items:center;gap:10px;padding:12px 14px;
+  font-size:13px;font-weight:600;text-align:left;
+}
+.conn .hd .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.conn .hd .ch{margin-left:auto;color:var(--faint);font-size:11px}
+.conn .bd{display:none;padding:0 14px 14px;border-top:1px solid var(--line)}
+.conn.open{width:min(370px,calc(100vw - 36px))}
+.conn.open .bd{display:block}
+.conn .seg{
+  display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:11px;
+  background:var(--panel-2);margin:14px 0 12px;
+}
+.conn .seg button{flex:1;padding:8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--dim)}
+.conn .seg button[aria-current=true]{background:rgba(255,255,255,.09);color:var(--ink)}
+.conn .fld{margin-bottom:11px}
+.conn .msg{font-size:12px;line-height:1.55;color:var(--faint);margin-top:4px}
+.conn .msg.bad{color:#ffb4b4}
+.conn .msg.good{color:#a7ecd8}
+.conn .kv{
+  display:flex;justify-content:space-between;font-size:12px;color:var(--faint);
+  padding:4px 0;border-top:1px solid rgba(255,255,255,.05);
+}
+.conn .kv span:last-child{color:var(--dim);font-family:var(--mono)}

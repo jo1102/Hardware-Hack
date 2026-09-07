@@ -1,0 +1,112 @@
+/* ==================================================================== *
+ * Kairo — the patient kiosk
+ *
+ * A tablet propped next to the box. Design rules, all of them deliberate:
+ *
+ *   - one thing on screen at a time, and it is the only thing that matters
+ *   - type sized in vw/vh so it fills whatever tablet is to hand
+ *   - touch targets no smaller than about 20mm, because the intended user
+ *     may have poor eyesight and unsteady hands
+ *   - NO navigation. There is nothing here to get lost in and no way to
+ *     reach the schedule editor or the pill counts by accident. The way to
+ *     the carer console is a deliberate press-and-hold, not a visible link.
+ * ==================================================================== */
+
+body{overflow:hidden}
+
+.kiosk{
+  position:relative;z-index:1;
+  min-height:100vh;min-height:100dvh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;gap:clamp(14px,2.6vh,34px);
+  padding:clamp(20px,4vh,52px) 20px;
+}
+
+.k-when{
+  font-size:clamp(13px,2.6vw,20px);font-weight:640;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--faint);
+}
+.k-num{
+  font-size:clamp(74px,19vw,220px);font-weight:660;letter-spacing:-.05em;
+  line-height:.9;font-variant-numeric:tabular-nums;
+}
+.k-med{
+  font-size:clamp(24px,5.6vw,52px);font-weight:620;letter-spacing:-.02em;
+  display:flex;align-items:center;gap:clamp(10px,2vw,20px);
+  justify-content:center;flex-wrap:wrap;
+}
+.k-med .sw{
+  width:clamp(16px,3vw,30px);height:clamp(16px,3vw,30px);border-radius:50%;flex:none;
+}
+.k-note{font-size:clamp(15px,3vw,24px);color:var(--dim);max-width:24ch;line-height:1.45}
+.k-acts{display:flex;gap:clamp(12px,2vw,20px);flex-wrap:wrap;justify-content:center;margin-top:6px}
+.k-tail{font-size:clamp(12px,1.8vw,15px);color:var(--faint)}
+
+/* The primary action. Enormous on purpose. */
+.k-big{
+  padding:clamp(20px,3.6vh,34px) clamp(36px,8vw,78px);border-radius:22px;
+  font-size:clamp(21px,4.2vw,36px);font-weight:680;letter-spacing:-.01em;
+  background:linear-gradient(180deg,#5ff0cd,#28bb9b);color:#04120e;border:0;
+  box-shadow:0 22px 54px -22px rgba(79,224,189,.9);
+}
+.k-big:active{transform:translateY(2px)}
+.k-2nd{
+  padding:clamp(16px,2.8vh,24px) clamp(26px,4.4vw,44px);border-radius:17px;
+  font-size:clamp(15px,2.6vw,22px);font-weight:620;border:1px solid var(--line-2);
+  background:rgba(255,255,255,.05);color:var(--ink);
+}
+
+/* Due, and not yet taken. */
+.kiosk.due .k-num{color:var(--red)}
+.kiosk.due .pulse{animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+
+/* Empty tube: the machine failed to deliver, and says so without handing
+   the patient a job. */
+.kiosk.empty .k-num{color:var(--amber)}
+
+/* ---------- bright-room mode ---------- */
+/* Black on white, for a sunlit kitchen or for poor contrast vision. */
+body.hc{background:#fff}
+body.hc::before{display:none}
+body.hc .kiosk{color:#000}
+body.hc .k-when,body.hc .k-note,body.hc .k-tail{color:#39434f}
+body.hc .k-num{color:#000}
+body.hc .kiosk.due .k-num{color:#c81e1e}
+body.hc .kiosk.empty .k-num{color:#8a5a00}
+body.hc .k-2nd{border:2px solid #000;background:transparent;color:#000}
+body.hc .k-big{background:#0b7f68;color:#fff;box-shadow:none}
+body.hc .corner .hint{color:#39434f}
+
+/* ---------- the corner ---------- */
+/* Connection state as a dot, and the only route to the carer console:
+   press and hold. Not a link, because a visible link is a link a confused
+   person will tap. */
+.corner{
+  position:fixed;left:0;bottom:0;z-index:5;
+  display:flex;align-items:center;gap:9px;
+  padding:14px 18px;font-size:11.5px;color:var(--faint);
+  user-select:none;-webkit-user-select:none;touch-action:manipulation;
+}
+.corner .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.corner.ok .dot{background:var(--mint)}
+.corner.bad .dot{background:var(--red)}
+.corner .hint{opacity:0;transition:opacity .2s}
+.corner:active .hint,.corner.holding .hint{opacity:1}
+.corner .ring{
+  position:absolute;left:12px;bottom:12px;width:12px;height:12px;border-radius:50%;
+  border:2px solid var(--mint);opacity:0;transform:scale(1);
+}
+.corner.holding .ring{animation:hold 1.2s linear forwards}
+@keyframes hold{
+  from{opacity:.9;transform:scale(1)}
+  to{opacity:0;transform:scale(4.5)}
+}
+
+/* Bright-room toggle sits opposite, small but reachable. */
+.contrast-btn{
+  position:fixed;right:0;bottom:0;z-index:5;
+  padding:14px 18px;font-size:11.5px;color:var(--faint);
+}
+.contrast-btn:hover{color:var(--dim)}
+body.hc .contrast-btn{color:#39434f}

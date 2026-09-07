@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------
+# SECRETS — never commit these
+# ---------------------------------------------------------------------
+# Real WiFi credentials. Copy the .example file and fill in your own; the
+# copy stays on your machine. See README.md > Setup.
+wifi_config.py
+camera/XiaoCam/wifi_secrets.h
+secrets.h
+*.local
+
+# ---------------------------------------------------------------------
+# Vendored tools — 53MB of binaries that anyone can download in a minute
+# ---------------------------------------------------------------------
+tools/arduino-cli.exe
+tools/arduino-cli.zip
+tools/arduino-cli
+tools/LICENSE.txt
+
+# Arduino build output
+camera/XiaoCam/build/
+*.elf
+*.map
+
+# ---------------------------------------------------------------------
+# Runtime state
+# ---------------------------------------------------------------------
+# Written by the dispenser onto its own flash, not onto the PC, but a
+# pulled copy would only be one box's pill counts.
+kairo.json
+
+# ---------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------
+.vscode/*
+!.vscode/tasks.json
+.idea/
+Thumbs.db
+desktop.ini
+ehthumbs.db
+.DS_Store
+*.swp
+*~

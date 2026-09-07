@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kairo — carer console</title>
+<meta name="description" content="Kairo by Access Granted — the carer console for a low-cost automatic pill dispenser.">
+<meta name="theme-color" content="#06080b">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%230a0e14'/><circle cx='32' cy='32' r='17' fill='none' stroke='%234fe0bd' stroke-width='6' stroke-dasharray='80 27' stroke-linecap='round' transform='rotate(-90 32 32)'/></svg>">
+<link rel="stylesheet" href="app/theme.css">
+<link rel="stylesheet" href="app/carer.css">
+</head>
+<body>
+
+<div class="wrap">
+<header class="top">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="15" fill="#0d1219" stroke="rgba(255,255,255,.09)"/>
+      <circle cx="32" cy="32" r="17" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="5.5"/>
+      <circle cx="32" cy="32" r="17" fill="none" stroke="#4fe0bd" stroke-width="5.5"
+              stroke-dasharray="78 29" stroke-linecap="round" transform="rotate(-90 32 32)"/>
+      <circle cx="32" cy="32" r="4.6" fill="#4fe0bd"/>
+    </svg>
+    <div><h1>Kairo</h1><span class="by">Carer console · Access Granted</span></div>
+  </div>
+
+  <nav class="views" aria-label="Sections">
+    <button data-view="dashboard" aria-current="true">Dashboard</button>
+    <button data-view="camera">Check-in</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+
+  <span class="spacer"></span>
+
+  <!-- The patient screen is a separate page for a separate device. Opened
+       in a new tab so the carer never loses this one. -->
+  <a class="chip" href="patient.html" target="_blank" rel="noopener"
+     title="Open the patient kiosk — this is what goes on the tablet beside the box">
+    <span class="dot" style="background:var(--blue)"></span>Patient screen ↗
+  </a>
+  <span class="chip" id="alarmChip" role="button" tabindex="0"
+        title="Browser notifications for refills, missed doses and help requests">
+    <span class="dot"></span><span id="alarmTxt">Alerts off</span>
+  </span>
+  <span class="chip demo" id="srcChip"><span class="dot"></span><span id="srcTxt">Demo data</span></span>
+  <span class="clock num" id="hostClock">--:--:--</span>
+</header>
+
+<!-- ==================== DASHBOARD ==================== -->
+<main id="dashboard" class="grid">
+
+  <!-- First thing on the page, because it is the only part that asks the
+       carer to actually do something. -->
+  <section class="card alerts calm" id="alerts">
+    <div class="hdr">
+      <div><h2>Needs your attention</h2><p class="sub" id="alertCount">Nothing needs you</p></div>
+      <span class="chip warn" id="alertBadge" hidden>0</span>
+    </div>
+    <ul class="alert-list" id="alertList"></ul>
+    <div class="refill" id="refillBox" hidden></div>
+  </section>
+
+  <section class="card span5">
+    <div class="hero" id="hero">
+      <div class="ring">
+        <div class="glow" id="ringGlow"></div>
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="43" fill="none" stroke="rgba(255,255,255,.075)" stroke-width="6"/>
+          <circle id="ringArc" cx="50" cy="50" r="43" fill="none" stroke="#4fe0bd" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="270.2" stroke-dashoffset="270.2"
+                  style="transition:stroke-dashoffset .6s linear, stroke .5s"/>
+        </svg>
+        <div class="face">
+          <div class="lab" id="ringLab">Next dose in</div>
+          <div class="big num" id="ringBig">--</div>
+          <div class="sml" id="ringSml">&nbsp;</div>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="who" id="heroWho">Patient</div>
+        <div class="med"><span class="swatch" id="heroSw"></span><span id="heroMed">—</span></div>
+        <div class="at" id="heroAt">No schedule set</div>
+        <div class="acts">
+          <button class="btn primary" id="btnForce">Dispense next dose</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span7">
+    <div class="hdr">
+      <div><h2>Adherence</h2><p class="sub" id="adhSub">Doses taken on time</p></div>
+      <span class="chip" id="adhTag"><span class="dot"></span><span>—</span></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">14-day adherence</div><div class="v num" id="stAdh">—</div><div class="n" id="stAdhN">no data yet</div></div>
+      <div class="stat"><div class="k">Doses today</div><div class="v num" id="stToday">—</div><div class="n" id="stTodayN">&nbsp;</div></div>
+      <div class="stat"><div class="k">Missed, 14 days</div><div class="v num" id="stMiss">—</div><div class="n" id="stMissN">&nbsp;</div></div>
+    </div>
+    <div class="days" id="daysBar" role="img" aria-label="Daily adherence, last 14 days"></div>
+    <div class="days-legend"><span>14 days ago</span><span>Today</span></div>
+  </section>
+
+  <div class="tubes" id="tubeCards"></div>
+
+  <section class="card span7">
+    <h2>Schedule &amp; refills</h2>
+    <p class="sub">Changes go straight to the box. Nothing needs restarting.</p>
+    <div id="editors"></div>
+  </section>
+
+  <section class="card span5">
+    <h2>On the box</h2>
+    <p class="sub">Exactly what the patient sees on the 1602 screen — 16 characters by 2 lines.</p>
+    <div class="lcd-wrap">
+      <div class="bezel"><div class="lcd" id="lcd" aria-live="polite"></div></div>
+      <div class="lcd-cap">HD44780 · 16×2 · I²C 0x27 · SDA 14 / SCL 42</div>
+    </div>
+    <div class="hw" id="hwList" style="margin-top:18px"></div>
+    <div class="note info">
+      <b>Stock warnings never appear on the box.</b> Running low is your job, not theirs —
+      it surfaces at the top of this page instead.
+    </div>
+    <div class="note">
+      <b>A green dot is not proof of a servo.</b> Nothing on the board can sense whether
+      one is wired to a pin — it only confirms the PWM channel came up. Use <b>Test gate</b>
+      on a tube card to check the mechanism.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Activity</h2>
+    <p class="sub">Every dose, refill, reminder and help request, newest first.</p>
+    <ul class="log" id="logList"></ul>
+  </section>
+</main>
+
+<!-- ==================== CHECK-IN ==================== -->
+<section id="camera" class="grid">
+  <div class="card span8">
+    <div class="hdr">
+      <div><h2>Wellbeing check-in</h2><p class="sub">Live view from the XIAO ESP32-S3 Sense beside the box.</p></div>
+      <button class="btn" id="btnCam">Start check-in</button>
+    </div>
+    <div class="cam-frame" id="camFrame">
+      <div class="cam-off">
+        <div class="eye">◉</div>
+        <h3>Camera is off</h3>
+        <p>The stream stays off until a carer asks for it. Enter the camera address
+           and press <b>Start check-in</b>.</p>
+      </div>
+    </div>
+    <div class="privacy">
+      <span class="i">🔒</span>
+      <p><b>This is not monitoring.</b> The camera has no recording, no storage and no
+      face recognition. It opens only when a carer presses the button, shows an indicator
+      while it is on, and closes when you leave this page — a consented look-in to decide
+      whether somebody needs a phone call, nothing more.</p>
+    </div>
+  </div>
+
+  <div class="card span4">
+    <h2>Camera</h2>
+    <p class="sub">Second board, its own WiFi connection.</p>
+    <div style="margin-bottom:12px">
+      <label class="fl" for="camIp">Address from the serial log</label>
+      <input type="text" id="camIp" placeholder="10.24.109.107" autocomplete="off">
+    </div>
+    <div class="hw">
+      <div class="p" id="camStat"><span class="dot"></span><span class="nm">Stream</span><span class="pin">idle</span></div>
+      <div class="p"><span class="dot" style="background:var(--blue)"></span><span class="nm">Board</span><span class="pin">XIAO ESP32-S3 Sense</span></div>
+      <div class="p"><span class="dot" style="background:var(--blue)"></span><span class="nm">Feed</span><span class="pin">MJPEG :81/stream</span></div>
+    </div>
+    <div class="note info">
+      The address is DHCP-assigned and changes on every boot, so read it from
+      <span class="mono">serial-tools/read_serial.py</span> rather than trusting an old one.
+      The sketch needs <span class="mono">PSRAM=opi</span> or the camera will not initialise.
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn sm" id="btnSnap">Open still frame</button>
+      <button class="btn sm ghost" id="btnCamUi">Camera settings</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SETTINGS ==================== -->
+<section id="settings" class="grid">
+  <div class="card span6">
+    <h2>Reminder sound</h2>
+    <p class="sub">What the box plays when a dose is due. Stored on the board, so it survives a power cut.</p>
+    <div class="sounds" id="soundList" role="radiogroup" aria-label="Reminder sound"></div>
+    <div class="vol">
+      <label class="fl" for="volume" style="margin:0;white-space:nowrap">Volume</label>
+      <input type="range" id="volume" min="0" max="100" step="5" value="35">
+      <span class="val num" id="volVal">35%</span>
+    </div>
+    <div class="note">
+      <b>Loud enough matters.</b> The chime has to carry into the next room, but it also
+      plays several times a day for years — anything that reads as an emergency in week one
+      gets ignored by week three. That is why none of these are alarms.
+    </div>
+    <div class="note info">
+      A missed dose or an empty tube always uses a separate, more insistent tune so the two
+      can never be confused. That one is deliberately not adjustable.
+    </div>
+  </div>
+
+  <div class="card span6">
+    <h2>Who this is for</h2>
+    <p class="sub">Stored on the board alongside the schedule.</p>
+    <div style="margin-bottom:14px">
+      <label class="fl" for="cfgPatient">Name shown on this console</label>
+      <input type="text" id="cfgPatient" maxlength="40" placeholder="e.g. Mum, or Margaret">
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="flex:1 1 150px">
+        <label class="fl" for="cfgLow">Warn me at</label>
+        <input type="number" id="cfgLow" min="1" max="200" value="10">
+      </div>
+      <div style="flex:1 1 150px">
+        <label class="fl" for="cfgRemind">Repeat reminder every</label>
+        <input type="number" id="cfgRemind" min="1" max="60" value="3">
+      </div>
+      <div style="flex:1 1 150px">
+        <label class="fl" for="cfgMissed">Call it missed after</label>
+        <input type="number" id="cfgMissed" min="2" max="240" value="15">
+      </div>
+    </div>
+    <p class="sub" style="margin:8px 0 0">Pills · minutes · minutes</p>
+    <div style="margin-top:14px;display:flex;gap:9px;align-items:center">
+      <button class="btn primary" id="btnSaveCfg">Save to device</button>
+      <span class="saved" id="cfgSaved" style="font-size:12px;color:var(--mint);opacity:0;transition:opacity .3s">Saved</span>
+    </div>
+    <div class="note info">
+      <b>Give up after</b> is when an untaken dose is recorded as missed and raised here.
+      It does not retract the pills — they are already in the tray.
+    </div>
+  </div>
+
+  <div class="card span6">
+    <div class="hdr">
+      <div><h2>Device console</h2><p class="sub">Raw serial from the board.</p></div>
+      <button class="btn sm ghost" id="btnProbe">Re-probe pins</button>
+    </div>
+    <div class="term" id="term"></div>
+    <div class="note info">
+      Anything the board prints that is not JSON lands here, so an ordinary
+      <span class="mono">print()</span> while debugging still shows up.
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- ==================== connection drawer ==================== -->
+<aside class="conn" id="conn">
+  <button class="hd" id="connHd" aria-expanded="false">
+    <span class="dot" id="connDot" style="background:var(--amber)"></span>
+    <span id="connTitle">Demo data — no board attached</span>
+    <span class="ch" id="connChev">▲</span>
+  </button>
+  <div class="bd">
+    <div class="seg" role="tablist">
+      <button data-src="demo" aria-current="true">Demo</button>
+      <button data-src="bridge" aria-current="false">Live device</button>
+    </div>
+    <div id="bridgeCfg" hidden>
+      <div class="fld">
+        <label class="fl" for="baseUrl">Bridge address</label>
+        <input type="text" id="baseUrl" placeholder="http://localhost:8000" autocomplete="off">
+      </div>
+      <div class="fld">
+        <label class="fl" for="portSel">Serial port</label>
+        <select id="portSel"><option value="">auto-detect</option></select>
+      </div>
+      <div class="kv"><span>Board</span><span id="kvFw">—</span></div>
+      <div class="kv"><span>Frame age</span><span id="kvAge">—</span></div>
+      <div class="kv"><span>Clock</span><span id="kvClock">—</span></div>
+    </div>
+    <p class="msg" id="connMsg">
+      Everything works without hardware. Switch to <b>Live device</b> once
+      <span class="mono">python site/bridge.py</span> is running.
+    </p>
+  </div>
+</aside>
+
+<div class="toasts" id="toasts"></div>
+<div class="sr" id="live" aria-live="assertive"></div>
+
+<script src="app/core.js"></script>
+<script src="app/device.js"></script>
+<script src="app/carer.js"></script>
+</body>
+</html>
