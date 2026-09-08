@@ -285,6 +285,34 @@ tools/arduino-cli.exe upload -p COM6 --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi"
 python serial-tools/read_serial.py
 ```
 
+### The camera pin list is NOT a wiring guide
+
+`camera_pins.h` lists sixteen GPIOs for `CAMERA_MODEL_XIAO_ESP32S3` (XCLK 10,
+SIOD 40, SIOC 39, Y2-Y9, VSYNC 38, HREF 47, PCLK 13). **None of them get
+wired.** They are traces already etched into the XIAO Sense expansion board,
+and most of them - everything above GPIO 9 - are not brought out to the
+14-pin edge header at all. The list is compile-time configuration telling the
+driver which internal pins the traces use.
+
+The whole physical assembly is:
+
+1. Seat the XIAO ESP32-S3 core board onto the **Sense** expansion board (the
+   one with the camera socket, microphone and SD slot). The two boards
+   sandwich together on the board-to-board connector.
+2. Plug the camera ribbon into the socket on the Sense board: flip the dark
+   latch up, slide the ribbon in with the gold contacts facing the PCB, press
+   the latch down.
+3. USB-C to the laptop.
+
+No jumper wires. If the ribbon is backwards, loose or not seated, the serial
+log says `Camera init failed with error 0x...` and nothing else happens - the
+sketch returns early rather than pretending.
+
+**Coincidence worth naming:** the XIAO camera uses GPIO38 and GPIO39
+internally, and Kairo's tube-2 and tube-3 gate servos also use GPIO38 and
+GPIO39. Different boards, so there is no conflict - but do not "fix" one
+after reading the other.
+
 `PSRAM=opi` is **not optional** - this board definition defaults PSRAM to
 *disabled*, and the camera needs it.
 
