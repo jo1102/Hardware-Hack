@@ -223,6 +223,45 @@ finishes, then state is published, and only then does `chime()` play. That
 ordering is deliberate - it means the peak is one servo *or* the amplifier,
 never both.
 
+### What to power it from
+
+**Not a 9V PP3 battery.** It cannot do this, for two independent reasons:
+
+- **It cannot supply the current.** A PP3 is a ~500mAh cell with 1-2 ohm of
+  internal resistance, designed for smoke alarms and multimeters - loads of
+  tens of milliamps. At 0.95A you lose roughly **1-2V inside the cell
+  itself**, so the rail collapses exactly when the servo starts moving. That
+  is the same brownout as the Power notes below, just with a battery causing
+  it instead of a USB port.
+- **Dropping 9V to 5V wastes most of it.** A linear regulator (7805) at 0.95A
+  burns **3.8W as heat** - a TO-220 with no heatsink handles maybe 1-2W before
+  thermal shutdown. A switching buck converter is far better at ~90%, but it
+  still needs ~590mA out of the battery, which a PP3 cannot sustain either.
+
+And even if the current were free, 500mAh against a ~250mA average is under
+two hours.
+
+**NEVER connect 9V to a pin on either board.** The XIAO's VUSB pin is the USB
+5V rail; 9V there will most likely destroy the board. The Freenove's 5V pin is
+no better.
+
+**Use a USB power bank instead.** It is already 5V, so there is no regulator
+and no heat, it will deliver 2A or more, and a 10000mAh one runs this for
+about **40 hours**. You almost certainly own one.
+
+| Rail | Source | Feeds |
+|---|---|---|
+| Laptop USB | the cable you already need for the bridge | Freenove: LCD, amplifier, serial |
+| USB power bank | via a USB-to-bare-wire breakout | 3 servos + XIAO VUSB |
+
+Tie the power bank's ground to the Freenove's ground, or the servo PWM has no
+reference.
+
+If the power bank does not materialise on the day, run the dispenser on laptop
+USB with the servos unplugged - the site reports the gates as unresponsive
+rather than pretending - or run the whole demo in the site's simulation mode.
+Neither needs any external power at all.
+
 ### Add a bulk capacitor
 
 **470-1000uF electrolytic across the 5V rail, physically close to the
