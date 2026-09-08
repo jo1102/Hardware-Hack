@@ -179,6 +179,82 @@ console), 26-37 (Octal PSRAM on this module - `Pin(34)` raises `invalid pin`).
 
 ## Power
 
+### The budget
+
+Two boards, two separate supplies, so the budget splits in two. Figures marked
+**measured** come from this project; the rest are datasheet-typical and
+**nothing here has been metered** - see the note at the end.
+
+**Freenove rail** - laptop USB (500mA on USB2, 900mA on USB3):
+
+| | Draw | When |
+|---|---|---|
+| ESP32-S3 running the agent, **radio off** | ~40mA | always |
+| 1602 LCD + PCF8574 backpack, backlight on | ~25mA | always |
+| PAM8403 amplifier, quiescent | ~15mA | always |
+| PAM8403 driving 8 ohm at `VOLUME = 0.35` | +~60mA | ~5s per dose |
+| **Continuous total** | **~80mA** | |
+| **Peak** | **~140mA** | during a chime |
+
+Comfortable - even a weak USB2 port has several times the headroom. Two
+reasons it stays this low: the Kairo agent **never brings up WiFi** (it talks
+over the USB serial it is already plugged into), and the servos are not on
+this rail.
+
+**External 5V rail** - the servos and the XIAO:
+
+| | Draw | When |
+|---|---|---|
+| SG90 servo, stalled (**measured**, see below) | 500-700mA | ~2.5s per dose |
+| XIAO ESP32-S3 Sense: WiFi + camera, idle | ~120-180mA | always |
+| XIAO actively streaming QVGA | ~180-250mA | while a carer is watching |
+| XIAO WiFi transmit peaks | up to ~400mA | milliseconds |
+| **Worst realistic case** | **~950mA** | one servo + XIAO streaming |
+
+**Use a 5V 2A supply.** That is roughly 2x headroom on the worst case.
+
+### Two things that keep the peak down, by design
+
+**Only one servo ever moves at a time.** `dispense()` takes a single tube
+index; there is no code path that drives two.
+
+**The servo and the chime never overlap.** In `do_dispense()` the servo travel
+finishes, then state is published, and only then does `chime()` play. That
+ordering is deliberate - it means the peak is one servo *or* the amplifier,
+never both.
+
+### Add a bulk capacitor
+
+**470-1000uF electrolytic across the 5V rail, physically close to the
+servos.** Servo inrush is a fast transient, and a capacitor supplies it
+locally so the rail does not sag. This is the standard fix for exactly the
+brownout described below, and it is worth doing even with a 2A supply.
+
+Watch the polarity, and remember the external supply's ground **must** be
+tied to the Freenove's ground or the servo PWM signal has no reference.
+
+### If you ever need less
+
+Not needed on mains power, but for the record:
+
+- `WiFi.setSleep(false)` in `XiaoCam.ino` keeps the radio awake permanently.
+  Setting it `true` cuts the continuous draw noticeably, at the cost of some
+  stream latency.
+- `config.xclk_freq_hz = 20000000` can come down.
+- The camera sensor **cannot** be powered down in software on this board:
+  `PWDN_GPIO_NUM` is `-1`, so there is no power-down line wired. The only way
+  to idle the sensor is to cut power to the whole XIAO.
+- The LCD backlight is on permanently. `I2C_LCD.py` has
+  `hal_backlight_off()`, and nothing calls it.
+
+### Nothing here has been metered
+
+Only the servo stall figure comes from this project. Everything else is a
+datasheet estimate. **An inline USB power meter costs about as much as a
+coffee and would settle all of it in five minutes** - given the history
+below, it is the single most useful thing you could add to the bench.
+
+
 **Do not run the servo from the board's 5V pin while it is USB powered.** This
 cost the most time of anything in this project. An SG90 draws 500-700 mA at
 stall, which on its own exceeds what a typical USB port supplies, and the
