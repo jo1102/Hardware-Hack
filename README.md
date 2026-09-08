@@ -308,6 +308,47 @@ No jumper wires. If the ribbon is backwards, loose or not seated, the serial
 log says `Camera init failed with error 0x...` and nothing else happens - the
 sketch returns early rather than pretending.
 
+### Running the XIAO without a USB cable
+
+USB-C is needed to **flash** it, not to **run** it. Once the sketch is on
+there, two wires are enough:
+
+| XIAO pin | Goes to |
+|---|---|
+| **VUSB** (this is the 5V pin - same rail, Seeed label it VUSB on some revisions) | your external 5V rail |
+| **GND** (directly below it) | shared ground |
+
+Reading down the right-hand row from the USB-C end: **VUSB, GND, 3V3, D10,
+D9, D8, D7**. The left row is D0-D6.
+
+Two cautions:
+
+- **Never feed VUSB while USB-C is plugged in.** That pin is the USB VBUS
+  rail, so powering both ends can push current back at the host. One or the
+  other.
+- **Power it from the servos' external 5V supply, not from the Freenove.**
+  The XIAO with the camera streaming and WiFi transmitting is a real load,
+  and the Power section above is what happens when this board is asked for
+  more current than it has.
+
+### Finding the camera without the serial log
+
+Pin-powered means no serial, and the address is DHCP so it changes on every
+boot. The carer console solves this: **Check-in > Find it for me** asks the
+bridge to sweep the network for it. That works because the bridge is Python
+on the same network with no browser sandbox in the way - it looks for a host
+with port 81 open whose `/status` returns the CameraWebServer JSON, so it
+cannot mistake something else for the camera.
+
+It sweeps roughly 250 addresses per subnet in about four seconds, and it is
+**on demand only** - never on startup. Sweeping a network you happen to be
+joined to is not something a program should do uninvited, particularly on a
+university network.
+
+Static IPs and mDNS were both considered and rejected: on a phone hotspot the
+subnet varies by vendor and OS version, and hotspots frequently drop the
+multicast that mDNS needs.
+
 **Coincidence worth naming:** the XIAO camera uses GPIO38 and GPIO39
 internally, and Kairo's tube-2 and tube-3 gate servos also use GPIO38 and
 GPIO39. Different boards, so there is no conflict - but do not "fix" one

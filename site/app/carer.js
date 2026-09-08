@@ -685,6 +685,49 @@
     if (!quiet) $("#live").textContent = "Camera stopped.";
   }
 
+  /* ---------------------------------------------------- finding it ---- */
+  /* The XIAO's address comes from DHCP and moves every boot, and once the
+     board runs off breadboard power there is no serial log to read it from.
+     So the bridge sweeps the network instead - see CameraFinder in
+     bridge.py. This just drives it and fills the field in. */
+  let camFilled = "";
+
+  function renderCameraFinder(S) {
+    const c = S.camera;
+    const btn = $("#btnFindCam"), msg = $("#findCamMsg");
+
+    if (App.source === "demo") {
+      btn.disabled = true;
+      msg.textContent = "Needs the bridge running — this is demo mode.";
+      return;
+    }
+    if (!S.connected && !c) {
+      btn.disabled = true;
+      msg.textContent = "Needs the bridge running.";
+      return;
+    }
+    if (!c) { btn.disabled = false; msg.textContent = ""; return; }
+
+    btn.disabled = !!c.scanning;
+    btn.textContent = c.scanning ? "Looking…" : "Find it for me";
+
+    if (c.scanning) {
+      msg.textContent = "Checking " + (c.subnets || []).join(", ") +
+                        " — " + (c.scanned || 0) + " addresses tried";
+    } else if (c.ip) {
+      msg.textContent = c.note || ("found at " + c.ip);
+      // Fill the field once per discovery, and never over something the
+      // carer is in the middle of typing.
+      if (camFilled !== c.ip && document.activeElement !== $("#camIp")) {
+        camFilled = c.ip;
+        $("#camIp").value = c.ip;
+        store.set("camIp", c.ip);
+      }
+    } else {
+      msg.textContent = c.note || "";
+    }
+  }
+
   /* ================================================================== *
    * CONNECTION
    * ================================================================== */
@@ -741,6 +784,8 @@
       renderTubes(S); renderEditors(S); renderBox(S); renderLog(S);
     } else if (view === "settings") {
       renderSound(S); renderCfg(S); renderTerm(S);
+    } else if (view === "camera") {
+      renderCameraFinder(S);
     }
     renderConn(S);
   }
@@ -772,6 +817,19 @@
     $("#btnProbe").onclick = () => send({ c: "probe" }, "re-probe the pins");
 
     $("#btnCam").onclick = () => camOn ? camStop() : camStart();
+    $("#btnFindCam").onclick = async () => {
+      // Whatever is already in the field is worth one cheap check before
+      // sweeping 250 addresses.
+      const hint = ($("#camIp").value || "").trim().replace(/^https?:\/\//, "");
+      const res = await Bridge.findCamera(hint);
+      if (res && res.ok === false) {
+        toast("bad", "◉", "Could not reach the bridge",
+              "Start it with: python site/bridge.py");
+      } else {
+        toast("good", "◉", "Looking for the camera",
+              "Sweeping the network you are both on. A few seconds.");
+      }
+    };
     $("#camIp").value = store.get("camIp", "");
     $("#btnSnap").onclick = () => {
       const b = camBase();

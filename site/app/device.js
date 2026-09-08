@@ -187,6 +187,7 @@ const Kairo = (() => {
         cfg: this.cfg, chimes: this.chimes,
         events: this.events.slice(-20), history: this.history,
         console: [], now: new Date().toISOString().slice(0, 19),
+        camera: null,
       };
     },
 
@@ -258,6 +259,16 @@ const Kairo = (() => {
       } catch (e) { return { ok: false, error: String(e) }; }
     },
 
+    async findCamera(hint) {
+      try {
+        const r = await fetch(this.url("/api/camera/find"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hint: hint || null }),
+        });
+        return await r.json();
+      } catch (e) { return { ok: false, error: String(e) }; }
+    },
+
     async setPort(port) {
       try {
         await fetch(this.url("/api/port"), {
@@ -281,6 +292,7 @@ const Kairo = (() => {
         tubes: d.tubes || [], hw: d.hw || { present: {}, detail: {} },
         cfg: d.cfg || {}, chimes: d.chimes || [], events: d.events || [],
         history: null, console: s.console || [], now: d.now || null,
+        camera: s.camera || null,
       };
     },
   };

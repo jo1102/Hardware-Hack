@@ -25,12 +25,17 @@ HTTP API
     POST /api/command       {"c":"dispense","i":0} - forwarded verbatim
     GET  /api/ports         serial ports the bridge can see
     POST /api/port          {"port":"COM4"} - switch without restarting
+    GET  /api/camera        where the XIAO camera was last seen
+    POST /api/camera/find   sweep the local subnet looking for it
 
 Only the Python standard library plus pyserial, which is already installed
 here as a dependency of mpremote.
 """
 
 import argparse
+import concurrent.futures
+import http.client
+import ipaddress
 import json
 import os
 import socket
@@ -56,6 +61,154 @@ SILENCE_LIMIT = 15          # seconds of no state frames before a restart
 ESPRESSIF_VID = 0x303A      # native USB on both ESP32-S3 boards here
 
 
+# ---------------------------------------------------------------------------
+# Finding the camera
+# ---------------------------------------------------------------------------
+# The XIAO gets its address from DHCP and it changes every boot, which is only
+# a nuisance until you power the board from the breadboard instead of USB -
+# then there is no serial log to read it off at all.
+#
+# A phone hotspot makes the usual answers unreliable: a static IP needs a
+# subnet that varies by phone vendor and OS version, and mDNS depends on
+# multicast reaching between hotspot clients, which many hotspots drop. So the
+# bridge finds the camera instead. It is already Python on the same network
+# with no browser sandbox in the way.
+#
+# Deliberately ON DEMAND, never automatic: sweeping a subnet you happen to be
+# joined to is not something a program should do on startup uninvited,
+# especially on a university network.
+
+CAMERA_STREAM_PORT = 81     # the MJPEG server - almost nothing else uses it
+SCAN_CONNECT_TIMEOUT = 0.6
+SCAN_CONFIRM_TIMEOUT = 1.5
+SCAN_WORKERS = 128
+
+
+def local_ipv4s():
+    """Every IPv4 address this machine has, minus loopback."""
+    found = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.add(info[4][0])
+    except Exception:
+        pass
+    # The routed address - on a hotspot this is the one that matters. No
+    # packets are sent; connect() on a UDP socket just picks a route.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("8.8.8.8", 80))
+        found.add(probe.getsockname()[0])
+        probe.close()
+    except Exception:
+        pass
+    return sorted(ip for ip in found if not ip.startswith("127."))
+
+
+def probe_camera(host):
+    """Is a CameraWebServer answering on this address?
+
+    Two stages on purpose. Port 81 is a cheap, highly specific filter - it is
+    the stream server and little else listens there - and only the handful of
+    hosts that pass get the slower HTTP confirmation. Checking /status rather
+    than trusting port 81 alone is what stops the bridge reporting some
+    unrelated device as the camera.
+    """
+    try:
+        with socket.create_connection((host, CAMERA_STREAM_PORT),
+                                      timeout=SCAN_CONNECT_TIMEOUT):
+            pass
+    except Exception:
+        return False
+    try:
+        conn = http.client.HTTPConnection(host, 80, timeout=SCAN_CONFIRM_TIMEOUT)
+        conn.request("GET", "/status")
+        body = conn.getresponse().read(1200).decode("utf-8", "replace")
+        conn.close()
+        return '"framesize"' in body and '"xclk"' in body
+    except Exception:
+        return False
+
+
+class CameraFinder:
+    """Remembers where the camera was, and goes looking when asked."""
+
+    def __init__(self):
+        self.ip = None
+        self.checked = 0.0
+        self.scanning = False
+        self.note = ""
+        self.scanned = 0
+        self._lock = threading.Lock()
+
+    def snapshot(self):
+        return {"ip": self.ip, "scanning": self.scanning, "note": self.note,
+                "scanned": self.scanned,
+                "age": round(time.time() - self.checked, 1) if self.checked else None,
+                "subnets": ["%s.0/24" % ip.rsplit(".", 1)[0] for ip in local_ipv4s()]}
+
+    def find(self, hint=None):
+        with self._lock:
+            if self.scanning:
+                return False
+            self.scanning = True
+        threading.Thread(target=self._run, args=(hint,), daemon=True).start()
+        return True
+
+    def _hosts(self):
+        seen, hosts = set(), []
+        for mine in local_ipv4s():
+            try:
+                network = ipaddress.ip_interface(mine + "/24").network
+            except ValueError:
+                continue
+            for host in network.hosts():
+                text = str(host)
+                if text != mine and text not in seen:
+                    seen.add(text)
+                    hosts.append(text)
+        return hosts
+
+    def _run(self, hint):
+        try:
+            self.scanned = 0
+            # Somewhere it used to be, or something the carer typed in: worth
+            # one cheap check before sweeping 250 addresses.
+            for candidate in [hint, self.ip]:
+                if candidate and probe_camera(candidate):
+                    self.ip, self.checked = candidate, time.time()
+                    self.note = "still at %s" % candidate
+                    return
+
+            hosts = self._hosts()
+            if not hosts:
+                self.note = "no network to scan - is the laptop on the hotspot?"
+                self.checked = time.time()
+                return
+
+            with concurrent.futures.ThreadPoolExecutor(SCAN_WORKERS) as pool:
+                futures = {pool.submit(probe_camera, h): h for h in hosts}
+                for future in concurrent.futures.as_completed(futures):
+                    self.scanned += 1
+                    if future.result():
+                        self.ip = futures[future]
+                        self.checked = time.time()
+                        self.note = "found at %s" % self.ip
+                        for other in futures:
+                            other.cancel()
+                        return
+            self.ip = None
+            self.checked = time.time()
+            self.note = ("nothing answering on %d addresses - check the camera "
+                         "has power and joined the hotspot" % len(hosts))
+        except Exception as e:
+            self.note = "scan failed: %s" % e
+        finally:
+            self.scanning = False
+
+
+camera = CameraFinder()
+
+
 class Device:
     """The serial half. One thread owns the port; everyone else uses send()."""
 
@@ -78,6 +231,11 @@ class Device:
         self.rx = 0
         self._buf = b""
         self._stop = False
+        # Ports that opened but had no Kairo agent behind them. Both
+        # boards in this project report Espressif's USB vendor id, so
+        # auto-detect cannot tell the dispenser from the XIAO camera by
+        # identifier alone - it has to try one, and remember.
+        self._rejected = set()
 
     # --- lifecycle -----------------------------------------------------
 
@@ -127,10 +285,25 @@ class Device:
         return found
 
     def _pick_port(self):
+        """Choose a port to try, skipping ones already found to be wrong.
+
+        Without the skip this loops on the first candidate forever. With the
+        XIAO camera plugged in too - same vendor id, sorts the same way - it
+        would sit there soft-resetting the camera and never reach the
+        dispenser.
+        """
         if self.wanted_port:
             return self.wanted_port
-        options = self.candidates()
-        return options[0]["port"] if options else None
+        options = [o["port"] for o in self.candidates()]
+        if not options:
+            return None
+        fresh = [p for p in options if p not in self._rejected]
+        if not fresh:
+            # All tried. Start over rather than give up - deploy.py may have
+            # just put the agent onto one of them.
+            self._rejected.clear()
+            fresh = options
+        return fresh[0]
 
     # --- the connection loop -------------------------------------------
 
@@ -215,13 +388,18 @@ class Device:
             time.sleep(0.05)
 
         if not self.agent:
-            self.error = ("%s answered, but no Kairo agent. Run "
-                          "python dispenser/deploy.py" % port)
+            self._rejected.add(port)
+            others = [p for p in (o["port"] for o in self.candidates())
+                      if p not in self._rejected]
+            self.error = ("%s answered, but no Kairo agent%s. Run "
+                          "python dispenser/deploy.py"
+                          % (port, (", trying " + others[0]) if others else ""))
             self.log("bridge: %s" % self.error)
             self._close()
             return False
 
         self.error = ""          # cleared only now that an agent has answered
+        self._rejected.discard(port)
         self._sync_clock()
         self.send({"c": "state"})
         return True
@@ -319,6 +497,7 @@ class Device:
             },
             "device": self.state,
             "console": list(self.console)[-60:],
+            "camera": camera.snapshot(),
         }
 
 
@@ -412,6 +591,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             return self._json(self.device.snapshot())
+        if path == "/api/camera":
+            return self._json(camera.snapshot())
         if path == "/api/ports":
             return self._json({"ports": Device.candidates(),
                                "current": self.device.port,
@@ -446,6 +627,10 @@ class Handler(BaseHTTPRequestHandler):
             ok, error = self.device.send(body)
             return self._json({"ok": ok, "error": error, "sent": body})
 
+        if path == "/api/camera/find":
+            started = camera.find(body.get("hint"))
+            return self._json({"ok": True, "started": started,
+                               "camera": camera.snapshot()})
         if path == "/api/port":
             self.device.use_port(body.get("port"))
             return self._json({"ok": True, "port": body.get("port")})

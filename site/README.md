@@ -153,6 +153,10 @@ console — so ordinary `print()` debugging still works while the site is live.
 | `{"c":"servo","i":0,"a":90}` | hold one servo at an angle, for calibration |
 | `{"c":"cfg", …}` | patient name, low-stock threshold, reminder timing, chime, volume |
 
+The bridge has two HTTP endpoints of its own that never reach the board:
+`GET /api/camera` reports where the XIAO camera was last seen, and
+`POST /api/camera/find` sweeps the local subnet looking for it.
+
 The board replies with `{"e":"state", …}` about once a second, plus
 `{"e":"ack"}` for each command and `{"e":"event"}` as things happen.
 
@@ -266,7 +270,9 @@ in the repository root `README.md`.
 | Console says **No device** | `bridge.py` is not running, or the address in the bottom-right panel is wrong. |
 | Countdown frozen, frame age climbing | The agent stopped. The bridge restarts it on its own after fifteen seconds; the device console shows it happening. |
 | A tube's gate does nothing but its dot is green | The dot only means the PWM channel came up. Check the wiring, then `Test gate`. |
-| `No stream at …` on check-in | Wrong IP (it is DHCP and changes every boot — read it from `serial-tools/read_serial.py`), or **Start Stream** was never pressed on the camera's own page. |
+| `No stream at …` on check-in | Wrong IP, or **Start Stream** was never pressed on the camera's own page. Press **Find it for me** rather than hunting for the address — the IP is DHCP and moves every boot. |
+| `nothing answering on N addresses` | The camera has no power, has not joined the network, or your laptop is on a different one. All three devices have to be on the same hotspot. |
+| Bridge keeps soft-resetting the wrong board | Both boards report Espressif's USB vendor id, so auto-detect has to try one and remember. It rotates to the next candidate on its own; `--port COM4` skips the guessing. |
 | Board keeps rebooting during upload | Servo brownout. Unplug them and upload again. |
 | A chime option is greyed out | Its WAV is not on the board. `deploy.py` uploads `jingle5.wav`; the tune-based options need no file. |
 | Edits to `app/*.js` seem to do nothing | Hard-reload. The bridge sends `Cache-Control: no-store`, but browsers cache aggressively off `file://`. |

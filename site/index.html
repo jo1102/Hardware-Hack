@@ -163,9 +163,13 @@
   <div class="card span4">
     <h2>Camera</h2>
     <p class="sub">Second board, its own WiFi connection.</p>
-    <div style="margin-bottom:12px">
-      <label class="fl" for="camIp">Address from the serial log</label>
-      <input type="text" id="camIp" placeholder="10.24.109.107" autocomplete="off">
+    <div style="margin-bottom:10px">
+      <label class="fl" for="camIp">Camera address</label>
+      <input type="text" id="camIp" placeholder="192.168.43.5" autocomplete="off">
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn sm primary" id="btnFindCam">Find it for me</button>
+      <span class="sub" id="findCamMsg" style="margin:0;flex:1 1 140px"></span>
     </div>
     <div class="hw">
       <div class="p" id="camStat"><span class="dot"></span><span class="nm">Stream</span><span class="pin">idle</span></div>
@@ -173,9 +177,15 @@
       <div class="p"><span class="dot" style="background:var(--blue)"></span><span class="nm">Feed</span><span class="pin">MJPEG :81/stream</span></div>
     </div>
     <div class="note info">
-      The address is DHCP-assigned and changes on every boot, so read it from
-      <span class="mono">serial-tools/read_serial.py</span> rather than trusting an old one.
-      The sketch needs <span class="mono">PSRAM=opi</span> or the camera will not initialise.
+      <b>The address changes every boot</b> — it comes from DHCP. Rather than reading it
+      off the serial log each time, press <b>Find it for me</b>: the bridge sweeps the
+      network you are both on and looks for the camera. That works even when the XIAO is
+      running off breadboard power with no cable attached.
+    </div>
+    <div class="note">
+      The sketch needs <span class="mono">PSRAM=opi</span> at compile time, and
+      <b>Start Stream</b> has to be pressed once on the camera's own page — it does not
+      auto-start.
     </div>
     <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn sm" id="btnSnap">Open still frame</button>
