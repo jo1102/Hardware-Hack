@@ -157,6 +157,13 @@ class CameraFinder:
     def _hosts(self):
         seen, hosts = set(), []
         for mine in local_ipv4s():
+            # ponytail: assumes /24. True for every phone hotspot and home
+            # router, which is where this is used. On a larger subnet (a
+            # university /17, say) it scans only the local /24 and will miss
+            # the camera - but such networks isolate clients anyway, so the
+            # stream would not work even if it were found. Upgrade path: read
+            # the real prefix length per adapter and cap the sweep at ~1024
+            # hosts.
             try:
                 network = ipaddress.ip_interface(mine + "/24").network
             except ValueError:
