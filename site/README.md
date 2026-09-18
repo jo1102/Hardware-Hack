@@ -266,7 +266,7 @@ in the repository root `README.md`.
 |---|---|
 | `COM4 answered, but no Kairo agent` | The port is right but `main.py` is not on the board. Run `python dispenser/deploy.py`. |
 | `no serial ports found` | Board unplugged, or a stale port. `python -m mpremote connect list`. |
-| `mpremote: failed to access COM4` | The bridge is holding the port. Stop `bridge.py` before any `mpremote` or `deploy.py` command, then start it again. |
+| `mpremote: failed to access COM4` | The bridge is holding the port. `Ctrl-C` it, or if it is orphaned in the background: `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -like '*bridge.py*' } \| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`. Check it is free with `python -c "import serial; serial.Serial('COM4').close(); print('free')"`. |
 | Console says **No device** | `bridge.py` is not running, or the address in the bottom-right panel is wrong. |
 | Countdown frozen, frame age climbing | The agent stopped. The bridge restarts it on its own after fifteen seconds; the device console shows it happening. |
 | A tube's gate does nothing but its dot is green | The dot only means the PWM channel came up. Check the wiring, then `Test gate`. |
