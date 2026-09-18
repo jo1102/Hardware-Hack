@@ -42,8 +42,8 @@ python site/bridge.py               # then this, every time
 
 | | |
 |---|---|
-| Carer console | <http://localhost:8000> |
-| Patient kiosk | <http://localhost:8000/patient> |
+| Carer console | <http://localhost:9000> |
+| Patient kiosk | <http://localhost:9000/patient> |
 
 No WiFi, no IP addresses, no re-flashing between changes. `deploy.py` finds the
 COM port itself, copies the agent plus the drivers it needs, and soft-resets so

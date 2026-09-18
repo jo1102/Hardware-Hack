@@ -61,7 +61,7 @@ Then edit those two copies and put your own 2.4GHz network in them.
 python site/bridge.py --no-serial
 ```
 
-Open <http://localhost:8000>. Or skip Python entirely and double-click
+Open <http://localhost:9000>. Or skip Python entirely and double-click
 `site/index.html` - there is no build step, so it opens straight off disk.
 
 ### 4. Run it with the board
@@ -81,8 +81,8 @@ python site/bridge.py
 
 | Screen | URL |
 |---|---|
-| Carer console | <http://localhost:8000> |
-| Patient kiosk | <http://localhost:8000/patient> |
+| Carer console | <http://localhost:9000> |
+| Patient kiosk | <http://localhost:9000/patient> |
 
 It binds `0.0.0.0` and prints a LAN address too, so a phone or a tablet on the
 same network can open either page.

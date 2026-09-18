@@ -17,7 +17,7 @@ const Kairo = (() => {
 
   const App = {
     source: store.get("source", "demo"),
-    base:   store.get("base", "http://localhost:8000"),
+    base:   store.get("base", "http://localhost:9000"),
     S:      null,     // the normalised state
     at:     0,        // performance.now() when it arrived
     primed: false,    // has the first frame been absorbed silently?
@@ -391,7 +391,7 @@ const Kairo = (() => {
   }
 
   function setBase(url) {
-    App.base = (url || "").trim() || "http://localhost:8000";
+    App.base = (url || "").trim() || "http://localhost:9000";
     store.set("base", App.base);
     Bridge.snap = null; Bridge.portsAt = 0;
   }

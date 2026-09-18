@@ -653,7 +653,7 @@ def lan_ip():
 def main():
     ap = argparse.ArgumentParser(description="Kairo bridge")
     ap.add_argument("--port", help="serial port; auto-detected if omitted")
-    ap.add_argument("--http", type=int, default=8000, help="HTTP port")
+    ap.add_argument("--http", type=int, default=9000, help="HTTP port")
     ap.add_argument("--host", default="0.0.0.0",
                     help="bind address; 0.0.0.0 lets phones on the LAN in")
     ap.add_argument("--no-serial", action="store_true",
@@ -669,6 +669,16 @@ def main():
     Handler.device = device
     device.start()
 
+    # Binding 0.0.0.0 succeeds even when something else already holds
+    # 127.0.0.1 on this port - and on Windows the specific bind wins, so
+    # localhost would silently go to that other program while the printed
+    # URL looks fine. Docker Desktop squats on 8000, which is why the
+    # default moved to 9000. Check anyway and say so.
+    squatter = socket.socket()
+    squatter.settimeout(0.3)
+    taken = squatter.connect_ex(("127.0.0.1", args.http)) == 0
+    squatter.close()
+
     httpd = ThreadingHTTPServer((args.host, args.http), Handler)
     ip = lan_ip()
     print("")
@@ -682,6 +692,9 @@ def main():
     if args.no_serial:
         print("  hardware    disabled (--no-serial), UI runs in demo mode")
     print("  ---------------------------------------------")
+    if taken:
+        print("  !! something else already answers on localhost:%d" % args.http)
+        print("  !! use the LAN address above, or restart with --http 9001")
     print("  Ctrl-C to stop")
     print("")
     try:
