@@ -34,6 +34,7 @@
 #        {"c":"state"}                     send a state frame immediately
 #
 #   out  {"e":"state", ...}                the whole picture, about once a second
+#          includes "sonar":{"cm":42.0,"near":true} when the HC-SR04 answers
 #        {"e":"ack","c":"dispense","ok":true}
 #        {"e":"hello", ...}
 #
@@ -88,6 +89,10 @@ _dirty = False
 _dirty_at = 0
 _last_state_ms = 0
 _blink = 0
+
+near = False         # is somebody in front of the box right now?
+distance_cm = None   # last good ultrasonic reading
+_last_sonar_ms = 0
 
 
 # --- storage -----------------------------------------------------------
@@ -390,6 +395,30 @@ def tick_due():
         add_event("reminded", active, {"n": reminders})
 
 
+# --- presence ----------------------------------------------------------
+
+def sample_presence():
+    """Read the ultrasonic sensor and notice somebody arriving.
+
+    This is presence, not motion: the sensor reports distance, and a person
+    standing at the box is simply "something close". That is enough for the
+    one question worth answering - did they come to the box after it
+    chimed? - and it is honest about what the hardware can actually tell us.
+    """
+    global near, distance_cm
+
+    cm = hardware.read_distance()
+    was = near
+    distance_cm = cm
+    near = cm is not None and cm <= hardware.SONAR_NEAR_CM
+
+    # Only the arrival is worth recording, and only when the box is waiting
+    # for somebody. Logging every approach all day would bury the events
+    # that matter in noise.
+    if near and not was and mode == "due":
+        add_event("approached", active, {"cm": int(cm)})
+
+
 # --- screens -----------------------------------------------------------
 
 def lcd_view():
@@ -437,6 +466,8 @@ def state_frame():
                   if mode == "due" else 0,
         "next": {"tube": tube, "at": hhmm, "in": gap},
         "low": low_tube(),
+        "sonar": {"cm": round(distance_cm, 1) if distance_cm is not None else None,
+                  "near": near, "present": hardware.present.get("sonar", False)},
         "tubes": [{"label": t.get("label", ""), "dose": t.get("dose", 1),
                    "times": t.get("times", []), "count": t.get("count", 0)}
                   for t in tubes],
@@ -635,7 +666,7 @@ def pump():
 # --- main loop ---------------------------------------------------------
 
 def run():
-    global _blink, _last_state_ms
+    global _blink, _last_state_ms, _last_sonar_ms
 
     load()
     hardware.probe()
@@ -657,6 +688,15 @@ def run():
         tick_due()
 
         now = time.ticks_ms()
+
+        # Twice a second is plenty for "has somebody walked up to the box",
+        # and keeps the reads well clear of the 50ms command loop - a sonar
+        # ping at an empty room blocks for up to ~24ms waiting for an echo
+        # that never comes.
+        if time.ticks_diff(now, _last_sonar_ms) >= 500:
+            _last_sonar_ms = now
+            sample_presence()
+
         if time.ticks_diff(now, _last_state_ms) >= 1000:
             _last_state_ms = now
             _blink += 1

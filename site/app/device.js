@@ -187,7 +187,7 @@ const Kairo = (() => {
         cfg: this.cfg, chimes: this.chimes,
         events: this.events.slice(-20), history: this.history,
         console: [], now: new Date().toISOString().slice(0, 19),
-        camera: null,
+        camera: null, sonar: null,
       };
     },
 
@@ -288,7 +288,7 @@ const Kairo = (() => {
         clock_set: !!d.clock_set, mode: d.mode || "idle", active: d.active ?? null,
         waited: d.waited || 0,
         next: d.next || { tube: null, at: null, in: null },
-        low: d.low ?? null, lcd: d.lcd || null,
+        low: d.low ?? null, lcd: d.lcd || null, sonar: d.sonar || null,
         tubes: d.tubes || [], hw: d.hw || { present: {}, detail: {} },
         cfg: d.cfg || {}, chimes: d.chimes || [], events: d.events || [],
         history: null, console: s.console || [], now: d.now || null,

@@ -469,6 +469,16 @@
     rows.push([!!p.lcd,   "1602 display",        d.lcd   || "I²C 0x27"]);
     rows.push([!!p.audio, "Speaker / amplifier", d.audio || "I2S 2/41/48"]);
 
+    // Presence, when the ultrasonic sensor is fitted. Shows the live reading
+    // rather than just a dot, because "42cm" tells you it is working and
+    // "somebody is at the box" tells you something about the patient.
+    const sonar = S.sonar || {};
+    if (sonar.present || p.sonar) {
+      rows.push([true, sonar.near ? "Somebody at the box" : "Nobody at the box",
+                 (sonar.cm != null ? sonar.cm + " cm" : "no echo") +
+                 " · " + (d.sonar || "TRIG1 ECHO40")]);
+    }
+
     $("#hwList").innerHTML = rows.map(([on, name, pin]) => {
       const cls = !S.connected ? "" : on ? "ok" : "no";
       const shown = !S.connected ? "no device" : on ? pin : (String(pin).slice(0, 40) || "not detected");
@@ -585,6 +595,7 @@
     low: ["▾", "Running low"], empty: ["⊘", "Empty tube"], refill: ["＋", "Refilled"],
     snoozed: ["⏾", "Snoozed"], reminded: ["♪", "Reminded"], skipped: ["⤼", "Skipped"],
     tested: ["⟳", "Gate tested"], help: ["☎", "Help requested"],
+    approached: ["👣", "Came to the box"],
   };
 
   function eventNote(ev) {
@@ -602,6 +613,7 @@
       case "skipped":   return ev.why || "outside the catch-up window";
       case "tested":    return ev.what || "mechanism check, no dose logged";
       case "help":      return "from the patient screen";
+      case "approached": return "detected " + (ev.cm ?? "?") + "cm away while a dose was waiting";
       default:          return "";
     }
   }
@@ -656,6 +668,13 @@
     if (!base) return toast("warn", "◉", "Camera address needed",
       "Read the IP from the XIAO serial log and paste it in.");
     store.set("camIp", $("#camIp").value.trim());
+
+    // Sound the box, not this laptop. The point is that the person being
+    // looked at hears the camera come on - a light they might not be facing
+    // is not consent. Fire-and-forget: no dispenser attached just means no
+    // chime, which must never stop the carer seeing the stream.
+    send({ c: "chime", name: "chirp" });
+
     const frame = $("#camFrame");
     frame.innerHTML = '<img alt="Live view of the room" id="camImg">' +
       '<div class="cam-live-badge"><i></i>Live · not recorded</div>';

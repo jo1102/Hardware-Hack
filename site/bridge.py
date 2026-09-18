@@ -28,6 +28,10 @@ HTTP API
     GET  /api/camera        where the XIAO camera was last seen
     POST /api/camera/find   sweep the local subnet looking for it
 
+Pass --log FILE to append everything the board says to a file as well as the
+in-memory console, which only holds the last 250 lines and dies with the
+process.
+
 Only the Python standard library plus pyserial, which is already installed
 here as a dependency of mpremote.
 """
@@ -219,8 +223,9 @@ camera = CameraFinder()
 class Device:
     """The serial half. One thread owns the port; everyone else uses send()."""
 
-    def __init__(self, port=None, enabled=True):
+    def __init__(self, port=None, enabled=True, logfile=None):
         self.wanted_port = port
+        self.logfile = logfile
         self.enabled = enabled
         self.lock = threading.Lock()
         self.ser = None
@@ -467,8 +472,19 @@ class Device:
             self.agent = False
 
     def log(self, text):
-        self.console.append({"t": time.strftime("%H:%M:%S"), "line": text})
+        stamp = time.strftime("%H:%M:%S")
+        self.console.append({"t": stamp, "line": text})
         print("  " + text, flush=True)
+        # The in-memory console is a 250-line ring buffer that dies with the
+        # process, which is no use for working out what happened before a
+        # crash. Appending is best-effort: a logging failure must never take
+        # the serial link down with it.
+        if self.logfile:
+            try:
+                with open(self.logfile, "a", encoding="utf-8") as f:
+                    f.write("%s %s %s\n" % (time.strftime("%Y-%m-%d"), stamp, text))
+            except Exception:
+                pass
 
     # --- writing -------------------------------------------------------
 
@@ -663,6 +679,8 @@ def main():
     ap.add_argument("--http", type=int, default=9000, help="HTTP port")
     ap.add_argument("--host", default="0.0.0.0",
                     help="bind address; 0.0.0.0 lets phones on the LAN in")
+    ap.add_argument("--log", metavar="FILE",
+                    help="also append every serial console line to this file")
     ap.add_argument("--no-serial", action="store_true",
                     help="serve the UI without touching any hardware")
     args = ap.parse_args()
@@ -672,7 +690,8 @@ def main():
         print("    python -m pip install pyserial")
         return 1
 
-    device = Device(port=args.port, enabled=not args.no_serial)
+    device = Device(port=args.port, enabled=not args.no_serial,
+                    logfile=args.log)
     Handler.device = device
     device.start()
 
@@ -696,6 +715,8 @@ def main():
     print("  on the LAN  http://%s:%d   (add /patient for the tablet)"
           % (ip, args.http))
     print("  serial      %s" % (args.port or "auto-detect"))
+    if args.log:
+        print("  log         %s" % os.path.abspath(args.log))
     if args.no_serial:
         print("  hardware    disabled (--no-serial), UI runs in demo mode")
     print("  ---------------------------------------------")

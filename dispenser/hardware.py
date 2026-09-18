@@ -52,6 +52,30 @@ STEP_MS = 12      # delay between single-degree steps while creeping
 DWELL_MS = 260    # pause at the open position, to let a pill actually fall
 BACK_MS = 140     # pause after closing, before any second sweep
 
+# --- ultrasonic presence sensor (HC-SR04) ------------------------------
+#
+# DANGER: the HC-SR04's ECHO pin drives 5V. ESP32 GPIOs are 3.3V and are NOT
+# 5V tolerant, so ECHO must go through a divider or it will damage the pin:
+#
+#     ECHO ---[ 1k ]---+--- GPIO40
+#                      |
+#                    [ 2k ]
+#                      |
+#                     GND
+#
+# TRIG needs no divider - 3.3V is enough to trigger the module. VCC must be
+# 5V; the module does not work reliably at 3.3V.
+#
+# Pins: everything else on this board is taken. 21/38/39 are the gate
+# servos, 14/42 the LCD, 2/41/48 the amplifier, 47 the alternate speaker,
+# 4-18 the camera ribbon, 26-37 the PSRAM, 19/20 USB, 43/44 the console and
+# 0/45/46 strapping. That leaves 1 and 40.
+
+SONAR_TRIG = 1
+SONAR_ECHO = 40
+SONAR_NEAR_CM = 80        # closer than this counts as "somebody is here"
+SONAR_MAX_CM = 400        # HC-SR04 range ceiling; further reads as nothing
+
 # --- other peripherals -------------------------------------------------
 
 LCD_SDA, LCD_SCL, LCD_ADDR = 14, 42, 0x27
@@ -100,8 +124,8 @@ _NOTES = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392,
 # --- state -------------------------------------------------------------
 
 # present["servo"] is True if ANY servo answered; servos[] says which.
-present = {"servo": False, "lcd": False, "audio": False}
-detail = {"servo": "", "lcd": "", "audio": ""}
+present = {"servo": False, "lcd": False, "audio": False, "sonar": False}
+detail = {"servo": "", "lcd": "", "audio": "", "sonar": ""}
 servos = [False, False, False]
 
 _servo = [None, None, None]
@@ -109,6 +133,7 @@ _at = [0, 0, 0]                  # last commanded angle, per servo
 _lcd = None
 _lcd_cache = [None, None]
 _pwm_speaker = None
+_sonar = None            # (trig_pin, echo_pin) once probed
 _wav_ok = {}          # chime name -> is its WAV actually on the board
 
 
@@ -126,7 +151,7 @@ def _clamp_angle(a):
 
 def probe():
     """Look for each peripheral once. Safe to call again."""
-    global _lcd, _have_wav, _pwm_speaker
+    global _lcd, _pwm_speaker, _sonar
 
     from_servo = []
     try:
@@ -174,6 +199,22 @@ def probe():
     except Exception as e:
         present["lcd"] = False
         detail["lcd"] = repr(e)
+
+    try:
+        from machine import Pin
+        trig = Pin(SONAR_TRIG, Pin.OUT)
+        trig.value(0)
+        echo = Pin(SONAR_ECHO, Pin.IN)
+        _sonar = (trig, echo)
+        # Claiming the pins proves nothing about a sensor being attached -
+        # same as the servos. A real reading is the only evidence, so take
+        # one now and let present["sonar"] mean "it actually answered".
+        present["sonar"] = read_distance() is not None
+        detail["sonar"] = "TRIG%d ECHO%d" % (SONAR_TRIG, SONAR_ECHO)
+    except Exception as e:
+        _sonar = None
+        present["sonar"] = False
+        detail["sonar"] = repr(e)
 
     if AUDIO_BACKEND == "i2s":
         try:
@@ -349,6 +390,40 @@ def set_angles(closed=None, open_=None):
     if open_ and len(open_) == 3:
         SERVO_OPEN = tuple(_clamp_angle(a) for a in open_)
     return {"closed": list(SERVO_CLOSED), "open": list(SERVO_OPEN)}
+
+
+# --- ultrasonic --------------------------------------------------------
+
+def read_distance():
+    """Distance in cm to whatever is in front of the box, or None.
+
+    None means "no reading", which covers both a missing sensor and a real
+    echo timeout - and a timeout is the normal result when nothing is within
+    range, because sound sent into an empty room never comes back. Treating
+    "nothing there" as a number would be a lie, so it is not one.
+    """
+    if _sonar is None:
+        return None
+    trig, echo = _sonar
+    try:
+        from machine import time_pulse_us
+        import time as _t
+        trig.value(0)
+        _t.sleep_us(2)
+        trig.value(1)
+        _t.sleep_us(10)          # the datasheet's 10us trigger pulse
+        trig.value(0)
+        # Sound covers 1cm in ~29us each way, so cap the wait at the module's
+        # 400cm ceiling rather than the default one-second timeout - without
+        # this an empty room blocks the scheduler for a whole second.
+        us = time_pulse_us(echo, 1, SONAR_MAX_CM * 58 + 1000)
+        if us < 0:
+            return None
+        cm = us / 58.0
+        return cm if 2 <= cm <= SONAR_MAX_CM else None
+    except Exception as e:
+        detail["sonar"] = repr(e)
+        return None
 
 
 # --- sound -------------------------------------------------------------

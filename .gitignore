@@ -50,3 +50,6 @@ ehthumbs.db
 .DS_Store
 *.swp
 *~
+
+# Serial logs from --log
+*.log
