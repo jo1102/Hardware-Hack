@@ -13,7 +13,7 @@
 "use strict";
 
 const Kairo = (() => {
-  const { clamp, store, hhmmToSec, lcdRender, beep, toast, Notify, Hist } = K;
+  const { clamp, store, localIso, lcdRender, beep, toast, Notify, Hist } = K;
 
   const App = {
     source: store.get("source", "demo"),
@@ -30,18 +30,19 @@ const Kairo = (() => {
 
   /* ================================================================== *
    * SIMULATION
-   * A believable box: a patient-shaped schedule, one tube already low,
-   * and a fortnight of history so the adherence panel means something.
-   * It runs off the real wall clock, so the countdown genuinely counts.
+   * A believable box running the real flow: a tube's interval comes
+   * round, the chime plays, and the pill drops once somebody walks up.
+   * One tube is already low, and a fortnight of history gives the
+   * adherence panel something to show. Real wall clock throughout.
    * ================================================================== */
   const Sim = {
-    cfg: { patient: "Margaret Hale", low_at: 10, remind_every: 180,
-           remind_limit: 3, missed_after: 900, volume: .35,
-           chime: "jingle", catch_up: 3600 },
+    cfg: { patient: "Margaret Hale", low_at: 10, remind_every: 30,
+           remind_limit: 3, missed_after: 120, volume: .35, chime: "jingle",
+           near_cm: 80 },
     tubes: [
-      { label: "Metformin 500mg",   dose: 1, times: ["08:00", "20:00"], count: 42 },
-      { label: "Ramipril 5mg",      dose: 1, times: ["08:00"],          count: 18 },
-      { label: "Atorvastatin 20mg", dose: 1, times: ["20:00"],          count: 6  },
+      { label: "Aspirin",   dose: 1, every: 60, count: 42 },
+      { label: "Vitamin C", dose: 1, every: 30, count: 30 },
+      { label: "Iron",      dose: 1, every: 5,  count: 6  },
     ],
     chimes: [{ name: "jingle", kind: "wav", ok: true },
              { name: "gentle", kind: "tune", ok: true },
@@ -49,20 +50,17 @@ const Kairo = (() => {
              { name: "bells",  kind: "tune", ok: true },
              { name: "urgent", kind: "tune", ok: true }],
     mode: "idle", active: null, dueAt: 0, reminders: 0, takenUntil: 0,
-    emptyAt: 0, fired: new Set(), events: [], history: null,
+    emptyAt: 0, nextDue: [0, 0, 0], events: [], history: null,
 
     boot() {
       this.history = this.fakeHistory();
-      // A couple of plausible things that already happened today.
-      const now = new Date(), nowSec = now.getHours() * 3600 + now.getMinutes() * 60;
-      this.tubes.forEach((t, i) => t.times.forEach(hhmm => {
-        const sec = hhmmToSec(hhmm);
-        if (sec != null && sec < nowSec) {
-          this.fired.add(i + "|" + hhmm);
-          this.push("dispensed", i, { why: "scheduled " + hhmm, left: t.count, dose: t.dose }, hhmm);
-          this.push("taken", i, { why: "button" }, hhmm);
-        }
-      }));
+      // Each tube's last dose went fine, one interval ago.
+      const now = Date.now();
+      this.tubes.forEach((t, i) => {
+        this.nextDue[i] = now + t.every * 60000;
+        this.push("taken", i, { why: "at the box, 41 cm", left: t.count, dose: t.dose },
+                  now - t.every * 60000);
+      });
       if (this.tubes[2].count <= this.cfg.low_at)
         this.push("low", 2, { left: this.tubes[2].count });
     },
@@ -77,26 +75,31 @@ const Kairo = (() => {
       return out;
     },
 
-    push(kind, tube, extra, hhmm) {
-      const d = new Date();
-      if (hhmm) { const [h, m] = hhmm.split(":"); d.setHours(+h, +m, 0, 0); }
-      const ev = { k: kind, at: d.toISOString().slice(0, 19), ms: Date.now() };
+    push(kind, tube, extra, at) {
+      const ev = { k: kind, at: localIso(new Date(at || Date.now())), ms: Date.now() };
       if (tube != null) { ev.i = tube; ev.label = this.tubes[tube].label; }
       Object.assign(ev, extra || {});
       this.events.push(ev);
       if (this.events.length > 40) this.events.shift();
     },
 
+    /* A plausible ultrasonic reading. Somebody walks up a few seconds
+       after the chime and wanders the room otherwise, so the presence
+       panel shows the arrival that makes the pill drop. */
+    sonarCm() {
+      const now = Date.now(), t = now / 1000;
+      if ((this.mode === "due" && now - this.dueAt > 6000) ||
+          this.mode === "dispensing" || this.mode === "taken")
+        return 38 + 7 * Math.sin(t / 2.5);
+      return 170 + 95 * Math.sin(t / 19) + 45 * Math.sin(t / 4.3);
+    },
+
     nextDose() {
-      const n = new Date();
-      const now = n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
       let best = null;
-      this.tubes.forEach((t, i) => t.times.forEach(hhmm => {
-        const target = hhmmToSec(hhmm); if (target == null) return;
-        let d = target - now; if (d <= 0) d += 86400;
-        if (!best || d < best.in) best = { tube: i, at: hhmm, in: d };
-      }));
-      return best || { tube: null, at: null, in: null };
+      this.nextDue.forEach((at, i) => { if (at && (best == null || at < this.nextDue[best])) best = i; });
+      if (best == null) return { tube: null, at: null, in: null };
+      return { tube: best, at: localIso(new Date(this.nextDue[best])).slice(11, 16),
+               in: Math.max(0, (this.nextDue[best] - Date.now()) / 1000) };
     },
 
     lowTube() {
@@ -107,53 +110,51 @@ const Kairo = (() => {
       return worst;
     },
 
-    dispense(i, why) {
-      const t = this.tubes[i]; if (!t) return;
-      if (t.count <= 0) {          // mirrors the firmware: no pill, no dose
-        this.mode = "empty"; this.active = i; this.emptyAt = Date.now();
+    /* drop() and startDue() mirror the functions of the same names in
+       dispenser/main.py. */
+    drop(i, kind, why) {
+      const t = this.tubes[i];
+      this.mode = "dispensing"; this.active = i;
+      setTimeout(() => {
+        t.count = Math.max(0, t.count - t.dose);
+        this.push(kind, i, { why, left: t.count, dose: t.dose, servo: true });
+        if (t.count <= this.cfg.low_at) this.push("low", i, { left: t.count });
+        const day = this.history[this.history.length - 1];
+        if (kind === "taken" && day) { day.taken++; day.due++; }
+        this.mode = "taken"; this.takenUntil = Date.now() + 6000;
+      }, 1400);
+    },
+
+    startDue(i, why) {
+      this.active = i; this.dueAt = Date.now(); this.reminders = 0;
+      if (this.tubes[i].count <= 0) {          // no pill, no dose
+        this.mode = "empty"; this.emptyAt = Date.now();
         this.push("empty", i, { why });
         beep("alert");
         return;
       }
-      this.mode = "dispensing"; this.active = i;
-      setTimeout(() => {
-        t.count = Math.max(0, t.count - t.dose);
-        this.mode = "due"; this.dueAt = Date.now(); this.reminders = 0;
-        this.push("dispensed", i, { why, left: t.count, dose: t.dose, servo: true });
-        if (t.count <= this.cfg.low_at) this.push("low", i, { left: t.count });
-        beep();
-      }, 1400);
-    },
-
-    taken(i) {
-      const t = i == null ? this.active : i; if (t == null) return;
-      this.push("taken", t, { why: "button" });
-      const day = this.history[this.history.length - 1];
-      if (day) { day.taken++; day.due++; }
-      this.mode = "taken"; this.takenUntil = Date.now() + 4000;
+      this.mode = "due";
+      beep();
     },
 
     tick() {
-      const n = new Date();
-      const now = n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
-
-      if (this.mode === "taken" && Date.now() > this.takenUntil) { this.mode = "idle"; this.active = null; }
-      if (this.mode === "empty" && Date.now() - this.emptyAt > 60000) { this.mode = "idle"; this.active = null; }
+      const now = Date.now();
+      if (this.mode === "taken" && now > this.takenUntil) { this.mode = "idle"; this.active = null; }
+      if (this.mode === "empty" && now - this.emptyAt > 60000) { this.mode = "idle"; this.active = null; }
 
       if (this.mode === "idle") {
-        for (let i = 0; i < this.tubes.length; i++) {
-          for (const hhmm of this.tubes[i].times) {
-            const target = hhmmToSec(hhmm), key = i + "|" + hhmm;
-            if (target == null || this.fired.has(key)) continue;
-            if (now >= target && now - target <= this.cfg.catch_up) {
-              this.fired.add(key); this.dispense(i, "scheduled " + hhmm); return;
-            }
-          }
+        const i = this.nextDue.findIndex(at => at && now >= at);
+        if (i >= 0) {
+          this.nextDue[i] = now + this.tubes[i].every * 60000;
+          this.startDue(i, "every " + this.tubes[i].every + " min");
         }
       }
       if (this.mode === "due") {
-        const waited = (Date.now() - this.dueAt) / 1000;
-        if (waited >= this.cfg.missed_after) {
+        const waited = (now - this.dueAt) / 1000, cm = this.sonarCm();
+        // Both sensors watch; the simulated person trips the ultrasonic.
+        if (cm <= this.cfg.near_cm) {
+          this.drop(this.active, "taken", "at the box, " + Math.round(cm) + " cm");
+        } else if (waited >= this.cfg.missed_after) {
           this.push("missed", this.active, { waited: Math.round(waited) });
           const day = this.history[this.history.length - 1];
           if (day) { day.missed++; day.due++; }
@@ -167,7 +168,7 @@ const Kairo = (() => {
     },
 
     state() {
-      const next = this.nextDose(), low = this.lowTube();
+      const next = this.nextDose(), low = this.lowTube(), cm = this.sonarCm(), now = Date.now();
       const shown = this.active != null ? this.active : next.tube;
       const t = shown != null ? this.tubes[shown] : {};
       return {
@@ -178,24 +179,42 @@ const Kairo = (() => {
         lcd: lcdRender({ clock_set: true, mode: this.mode, tube: shown,
                          label: t.label, dose: t.dose,
                          next_hhmm: next.at, next_in: next.in }),
-        tubes: this.tubes.map(x => ({ ...x })),
-        hw: { present: { servo: true, lcd: true, audio: true },
+        tubes: this.tubes.map((x, i) => ({ ...x,
+          in: this.nextDue[i] ? Math.max(0, Math.round((this.nextDue[i] - now) / 1000)) : null })),
+        hw: { present: { servo: true, lcd: true, audio: true, sonar: true },
               servos: [true, true, true], pins: [21, 38, 39],
               closed: [10, 10, 10], open: [100, 100, 100],
               detail: { servo: "T1:21 T2:38 T3:39", lcd: "0x27 (sim)",
-                        audio: "I2S 2/41/48 (sim)" } },
+                        audio: "I2S 2/41/48 (sim)",
+                        sonar: "TRIG11 ECHO12 (sim)" } },
         cfg: this.cfg, chimes: this.chimes,
         events: this.events.slice(-20), history: this.history,
-        console: [], now: new Date().toISOString().slice(0, 19),
-        camera: null, sonar: null,
+        console: [], now: localIso(),
+        camera: null,
+        sonar: { cm: Math.round(cm * 10) / 10, near: cm <= this.cfg.near_cm, present: true },
+        // The simulated camera sees the same person the simulated sonar does.
+        vision: cm <= 80
+          ? { port: "COM6", note: "reading on COM6", near: true, score: 91, seen: "class 1 at 91%", age: 0 }
+          : { port: "COM6", note: "reading on COM6", near: false, score: 7, seen: "class 0 at 93%", age: 0 },
       };
     },
 
     command(c) {
+      const t = this.tubes[c.i];
       switch (c.c) {
-        case "dispense": this.dispense(c.i | 0, "manual"); break;
-        case "force":    { const n = this.nextDose(); this.dispense(n.tube ?? 0, "forced " + n.at); break; }
-        case "taken":    this.taken(c.i); break;
+        case "dispense":                         // as handle("dispense") on the board
+          if (!t || t.count <= 0) return { ok: false, error: "That tube is empty." };
+          if (this.mode === "due" && c.i === this.active) this.drop(c.i, "taken", "released by the carer");
+          else if (this.mode === "idle") this.drop(c.i, "dispensed", "by the carer");
+          else return { ok: false, error: "The box is busy with another dose." };
+          break;
+        case "force": {
+          const n = this.nextDose();
+          if (this.mode !== "idle" || n.tube == null) return { ok: false, error: "The box is busy." };
+          this.nextDue[n.tube] = Date.now() + this.tubes[n.tube].every * 60000;
+          this.startDue(n.tube, "started by the carer");
+          break;
+        }
         case "snooze":   if (this.mode === "due") {
                            this.dueAt = Date.now() + (c.m || 10) * 60000;
                            this.push("snoozed", this.active, { mins: c.m || 10 });
@@ -204,11 +223,13 @@ const Kairo = (() => {
                            this.tubes[c.i].count = clamp(c.n | 0, 0, 999);
                            this.push("refill", c.i, { to: this.tubes[c.i].count });
                          } break;
-        case "sched":    if (this.tubes[c.i]) {
-                           const t = this.tubes[c.i];
-                           if (c.times) t.times = [...new Set(c.times.filter(x => hhmmToSec(x) != null))].sort();
+        case "sched":    if (t) {
                            if (c.label != null) t.label = String(c.label).slice(0, 24);
                            if (c.dose != null)  t.dose = clamp(c.dose | 0, 1, 9);
+                           if (c.every != null && clamp(c.every | 0, 0, 1440) !== t.every) {
+                             t.every = clamp(c.every | 0, 0, 1440);
+                             this.nextDue[c.i] = t.every ? Date.now() + t.every * 60000 : 0;
+                           }
                          } break;
         case "sweep":    this.push("tested", c.i | 0, { what: "gate sweep" }); break;
         case "chime":    beep(c.name === "urgent" ? "alert" : "dose"); break;
@@ -289,6 +310,7 @@ const Kairo = (() => {
         waited: d.waited || 0,
         next: d.next || { tube: null, at: null, in: null },
         low: d.low ?? null, lcd: d.lcd || null, sonar: d.sonar || null,
+        vision: s.vision || null,
         tubes: d.tubes || [], hw: d.hw || { present: {}, detail: {} },
         cfg: d.cfg || {}, chimes: d.chimes || [], events: d.events || [],
         history: null, console: s.console || [], now: d.now || null,
@@ -332,14 +354,18 @@ const Kairo = (() => {
       if (App.seen.has(id)) return;
       App.seen.add(id);
       if (App.seen.size > 300) App.seen = new Set([...App.seen].slice(-200));
-      Hist.note(ev);
+      // Only the real box feeds the history Live mode reads. Demo has its
+      // own fake fortnight; tallying its events here showed them as
+      // "From the box" the moment Live was switched on.
+      if (App.source !== "demo") Hist.note(ev);
       if (priming) return;
 
+      // Good news only. An empty tube or a missed dose is an alert on the
+      // carer console and its own screen on the kiosk; a toast on top of
+      // that was the same news twice, with two beeps.
       const who = ev.label || ("Tube " + ((ev.i ?? 0) + 1));
-      if (ev.k === "dispensed") { toast("good", "◐", "Dose dispensed", who + " · " + (ev.left ?? "?") + " left"); beep(); }
-      if (ev.k === "taken")     { toast("good", "✓", "Dose taken", who); }
-      if (ev.k === "empty")     { toast("bad", "⊘", "Nothing to dispense", who + " is empty — a dose was due."); beep("alert"); }
-      if (ev.k === "missed")    { toast("bad", "✕", "Dose missed", who + " was not taken."); }
+      if (ev.k === "dispensed") { toast("good", "◐", "Dispensed", who + " · " + (ev.left ?? "?") + " left"); beep(); }
+      if (ev.k === "taken")     { toast("good", "✓", "Dose taken", who + " · " + (ev.left ?? "?") + " left"); beep(); }
     });
   }
 

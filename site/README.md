@@ -44,6 +44,7 @@ python site/bridge.py               # then this, every time
 |---|---|
 | Carer console | <http://localhost:9000> |
 | Patient kiosk | <http://localhost:9000/patient> |
+| Testing | <http://localhost:9000/test> |
 
 No WiFi, no IP addresses, no re-flashing between changes. `deploy.py` finds the
 COM port itself, copies the agent plus the drivers it needs, and soft-resets so
@@ -64,11 +65,11 @@ if the demo table has no power for the servos.**
 
 `bridge.py` binds `0.0.0.0` and prints a LAN address on startup. Open that on
 the phone, and `/patient` on the tablet. CORS is wide open, so a copy of the
-`site/` folder on a USB stick also works — put the bridge address into the
-panel in the bottom-right corner of the carer console.
+`site/` folder on a USB stick also works — click the **Demo data / Live**
+chip in the carer console's header and put the bridge address in there.
 
 Keyboard, for demoing quickly: <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch
-carer sections, <kbd>F</kbd> fires the next dose.
+carer sections.
 
 ---
 
@@ -83,6 +84,7 @@ by CORS on `file://`.
 site/
   index.html        carer console shell
   patient.html      patient kiosk shell
+  test.html         hardware testing page: dispense, test gates, LCD, console
   bridge.py         HTTP server + persistent USB serial link
   app/
     theme.css       design tokens and shared components (both pages)
@@ -92,11 +94,15 @@ site/
     device.js       the data layer: simulator, bridge client, command sending
     carer.js        carer rendering and wiring
     patient.js      kiosk rendering and wiring
+    test.js         testing page rendering and wiring
+sensecraft/
+  presence_relay.py  reading the SenseCraft person model (the bridge imports it)
 dispenser/
   main.py           the agent on the board: scheduler, protocol, persistence
   hardware.py       three gate servos, the 1602, the chimes
   lcdview.py        the 16x2 screen layouts
   deploy.py         one command to put all of it on the board
+  selfcheck.py      the agent on a fake board: dose flow, one servo per dose
 ```
 
 `core.js` and `device.js` are shared by both pages, so the simulator, the
@@ -141,21 +147,29 @@ console — so ordinary `print()` debugging still works while the site is live.
 |---|---|
 | `{"c":"hello"}` | identify, report which pins answered |
 | `{"c":"time","t":[Y,M,D,h,m,s]}` | set the RTC — this board has no battery |
-| `{"c":"sched","i":0,"times":["08:00"],"label":"…","dose":1}` | change one tube's schedule |
+| `{"c":"sched","i":0,"every":60,"label":"…","dose":1}` | change one tube: a dose every N minutes (0 = off) |
 | `{"c":"pills","i":0,"n":42}` | carer has refilled or recounted a tube |
-| `{"c":"dispense","i":0}` | dispense that tube right now |
-| `{"c":"force"}` | fire the next scheduled dose immediately |
-| `{"c":"taken","i":0}` | patient acknowledged |
+| `{"c":"dispense","i":0}` | drop from that tube now, no waiting (releases it if that tube is the one due) |
+| `{"c":"force"}` | start the next dose now: chime, then wait for somebody |
+| `{"c":"present","by":"camera"}` | somebody is at the box — the bridge's camera; drops a waiting dose |
 | `{"c":"help"}` | patient pressed “I need help” on the kiosk |
 | `{"c":"snooze","m":10}` | push the current reminder back |
 | `{"c":"sweep","i":0}` | one gate cycle, nothing logged — the Test gate button |
 | `{"c":"chime","name":"bells"}` | play a sound now, for previewing one |
 | `{"c":"servo","i":0,"a":90}` | hold one servo at an angle, for calibration |
-| `{"c":"cfg", …}` | patient name, low-stock threshold, reminder timing, chime, volume |
+| `{"c":"cfg", …}` | patient name, low-stock threshold, reminder timing, chime, volume, near_cm |
 
-The bridge has two HTTP endpoints of its own that never reach the board:
-`GET /api/camera` reports where the XIAO camera was last seen, and
-`POST /api/camera/find` sweeps the local subnet looking for it.
+The bridge has HTTP endpoints of its own that never reach the board.
+`GET /api/camera` reports where the XIAO camera was last seen and
+`POST /api/camera/find` sweeps the local subnet looking for it (for the
+optional WiFi camera sketch). `GET /api/camera/stream` is the SenseCraft
+camera's frames as live MJPEG - what the Check-in page plays.
+
+The ultrasonic reading arrives inside the board's own `{"e":"state"}` frame
+as `"sonar":{"cm":42.0,"near":true,"present":true}`. The camera's arrives in
+the bridge's `/api/state` as `"vision":{"port":"COM6","near":true,"seen":"class
+1 at 91%","note":"reading on COM6"}` - the bridge reads the XIAO itself and
+sends the board `{"c":"present"}`.
 
 The board replies with `{"e":"state", …}` about once a second, plus
 `{"e":"ack"}` for each command and `{"e":"event"}` as things happen.
@@ -171,19 +185,25 @@ you can leave. See the top of this file.
 when, and — if a tube is empty — that the machine failed them and the carer has
 been told. That is the entire vocabulary of the 1602 screen.
 
-**A dose that is hours late is not dispensed.** If the box was unplugged at
-08:00 and comes back at 14:00, giving somebody their morning pills six hours
-late is worse than skipping them. Anything older than the one-hour catch-up
-window is logged as skipped and the pills stay in the tube.
+**The pill waits for a person.** When a tube's interval comes round the box
+chimes and waits; the gate only opens once somebody is at the box. A pill left
+in the tray of an empty room is one a pet, a child or a visitor can take.
+Nobody within the missed window and it is logged as missed with the pill
+still in the tube - never dropped "just in case". Two sensor readings in a
+row are needed, so one stray echo cannot trigger it.
+
+**A late box never catches up in a burst.** If the box was off, or busy with
+another tube, a tube that is overdue gets one dose and carries on one interval
+from then - not a string of the doses it missed.
 
 **An empty tube does not log a dose.** The servo does not turn, the count is
 untouched, and the event is recorded as a failure to deliver rather than as
 medicine taken. Turning the gate on an empty tube would produce a perfect
 adherence record for a person who got nothing.
 
-**Editing a schedule cannot cause a double dose.** The record of what has
-already fired today is deliberately *not* cleared when the carer edits a tube,
-so fixing a typo at 08:30 does not trigger a second 08:00 dose.
+**Editing a schedule cannot move the next dose by accident.** Only a changed
+interval restarts that tube's clock; fixing a typo in a name or the pills per
+dose leaves the next dose exactly where it was.
 
 **The clock is refused rather than guessed.** The ESP32-S3 has no
 battery-backed RTC, so after a power cut it believes it is 2000-01-01. The
@@ -224,7 +244,7 @@ and drops it off USB entirely — file transfers die mid-write, the COM port
 vanishes, and none of it looks like a power problem. There are **three** of
 them, so an external 5 V supply with a shared ground is not optional. The
 firmware only ever drives one servo at a time, creeps a degree at a time, and
-releases the PWM between doses to keep the peak down. **If the board starts
+stops the pulses between doses so the servo goes slack. **If the board starts
 behaving strangely, unplug the servos before debugging anything else.**
 
 **One servo per tube, one sweep per pill.** Each tube has its own gate servo on
@@ -242,11 +262,16 @@ and 0/45/46 are strapping pins. 38/39 are only spoken for by the SD card in
 Freenove's *Arduino* sketch, which this MicroPython build cannot reach anyway.
 GPIO40 is the spare.
 
-**A servo cannot be detected.** `Servo.release()` calls `PWM.deinit()`, and a
-de-initialised PWM silently refuses every later write — which is why the
-firmware builds a fresh PWM per movement rather than holding one open. All the
-probe at startup can tell you is that the pin accepted PWM, *not* that a servo
-is wired to it. `Test gate` is the only real check.
+**Never `PWM.deinit()` a servo.** It frees the LEDC channel but leaves the pin
+wired to it, and MicroPython hands the freed channel to the next PWM on *any*
+pin - so each released servo copied the next one's pulses and every dose swung
+all three gates. Each servo now keeps its own channel for the life of the
+program and goes slack on a zero duty. `python dispenser/selfcheck.py` fakes
+the chip closely enough to show the old code failing and the new one not.
+
+**A servo cannot be detected.** All the probe at startup can tell you is that
+the pin accepted PWM, *not* that a servo is wired to it. `Test gate` is the
+only real check.
 
 **The LCD is 16 characters by 2 lines**, which is the constraint that shaped
 every string on the box. `dispenser/lcdview.py` returns exactly two
@@ -267,7 +292,10 @@ in the repository root `README.md`.
 | `COM4 answered, but no Kairo agent` | The port is right but `main.py` is not on the board. Run `python dispenser/deploy.py`. |
 | `no serial ports found` | Board unplugged, or a stale port. `python -m mpremote connect list`. |
 | `mpremote: failed to access COM4` | The bridge is holding the port. `Ctrl-C` it, or if it is orphaned in the background: `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -like '*bridge.py*' } \| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`. Check it is free with `python -c "import serial; serial.Serial('COM4').close(); print('free')"`. |
-| Console says **No device** | `bridge.py` is not running, or the address in the bottom-right panel is wrong. |
+| Console says **No device** | `bridge.py` is not running, or the bridge address under the header's source chip is wrong. |
+| Every gate moves when one tube dispenses | The board still runs the old firmware. The bridge log says `device: kairo-1.1` once the fix is on; anything older, stop the bridge and run `python dispenser/deploy.py --port COM4`. Still happening on 1.1: the signal wires touch - check no two sit in one breadboard row. |
+| At the box shows the camera as `not reading` | The line under it says why. `in use`: close the SenseCraft page, or an older bridge is still running (a new bridge now refuses to start beside one and says so). `no SenseCraft camera on USB`: plug the XIAO into the laptop running the bridge, with Person Classification loaded. If the camera goes quiet the bridge asks again after 5 s and reconnects after 15 s on its own. |
+| Check-in says `No camera yet` | Same as above - the live view is the SenseCraft camera's frames, so it needs the camera reading. |
 | Countdown frozen, frame age climbing | The agent stopped. The bridge restarts it on its own after fifteen seconds; the device console shows it happening. |
 | A tube's gate does nothing but its dot is green | The dot only means the PWM channel came up. Check the wiring, then `Test gate`. |
 | `No stream at …` on check-in | Wrong IP, or **Start Stream** was never pressed on the camera's own page. Press **Find it for me** rather than hunting for the address — the IP is DHCP and moves every boot. |

@@ -16,6 +16,9 @@ tools/arduino-cli.zip
 tools/arduino-cli
 tools/LICENSE.txt
 
+# The camera's person detector - 36MB, one curl away (README step 6)
+site/models/
+
 # Arduino build output
 camera/XiaoCam/build/
 *.elf

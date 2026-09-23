@@ -5,3 +5,4 @@
 
 pyserial>=3.5     # site/bridge.py holds the USB serial port open
 mpremote>=1.20    # copies files onto the MicroPython board
+opencv-python-headless>=4.9   # site/bridge.py spots a person in the camera's frames

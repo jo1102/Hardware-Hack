@@ -10,7 +10,7 @@
 "use strict";
 
 (() => {
-  const { $, store, humanGap, fmtGap, beep, toast, TUBE_COLOURS } = K;
+  const { $, store, humanGap, toast, TUBE_COLOURS } = K;
   const { App, send, liveGap, start } = Kairo;
 
   /* ------------------------------------------------------------ render */
@@ -30,7 +30,7 @@
     };
     if (!S.clock_set) return {
       cls: "", when: "Setting up", num: "…", med: name,
-      note: "Nearly ready. Nothing to do just yet.", acts: "", tail: "",
+      note: "", acts: "", tail: "",
     };
     if (S.mode === "empty") return {
       cls: "empty", when: "Tube " + ((idx ?? 0) + 1) + " is empty", num: "⊘", med: name,
@@ -41,22 +41,23 @@
       cls: "", when: "Getting your medicine", num: "•••", pulse: true, med: name,
       note: "The dispenser is turning. One moment.", acts: "", tail: "",
     };
+    // The box drops the pill itself once somebody is standing at it, so
+    // there is nothing to press here - only somewhere to go.
     if (S.mode === "due") return {
-      cls: "due", when: "Time for your medicine", num: "TAKE", pulse: true, med: name,
-      note: (tube ? (tube.dose || 1) : 1) + " pill from tube " + ((idx ?? 0) + 1) +
-            ", in the tray at the front.",
+      cls: "due", when: "Time for your medicine", num: "COME", pulse: true, med: name,
+      note: "Walk up to the box. Your pill drops when you are there.",
       acts: "due", tube: idx,
       tail: (S.waited || 0) < 0 ? "Reminder paused" : "",
     };
     if (S.mode === "taken") return {
-      cls: "", when: "All done", num: "✓", med: name,
-      note: "Logged. Your carer can see it.", acts: "", tail: "",
+      cls: "", when: "Your pill is in the tray", num: "✓", med: name,
+      note: "Take it with some water. Your carer can see it.", acts: "", tail: "",
     };
     return {
       cls: "", when: "Next dose in", num: gap == null ? "—" : humanGap(gap), med: name,
       note: S.next && S.next.at
-        ? "At " + S.next.at + ". Nothing to do until then."
-        : "No dose times set yet.",
+        ? "At " + S.next.at + "."
+        : "No doses scheduled yet.",
       acts: "help", tube: idx,
       tail: tube && tube.count != null
         ? tube.count + " pills left in tube " + ((idx ?? 0) + 1) : "",
@@ -65,22 +66,17 @@
 
   /* Buttons are rebuilt only when the SET of buttons changes, so a tap
      never lands on a button that was replaced mid-press. */
-  function renderActions(kind, tube) {
+  function renderActions(kind) {
     const host = $("#kActs");
     if (host.dataset.kind === kind) return;
     host.dataset.kind = kind;
     host.textContent = "";
 
     if (kind === "due") {
-      const take = document.createElement("button");
-      take.className = "k-big"; take.textContent = "I have taken it";
-      take.onclick = () => { send({ c: "taken", i: tube, why: "kiosk" }, "log the dose"); beep(); };
-
       const later = document.createElement("button");
       later.className = "k-2nd"; later.textContent = "Remind me in 10 minutes";
       later.onclick = () => send({ c: "snooze", m: 10 }, "snooze the reminder");
-
-      host.append(take, later);
+      host.append(later);
     } else if (kind === "help") {
       const help = document.createElement("button");
       help.className = "k-2nd"; help.textContent = "I need help";
@@ -110,7 +106,7 @@
     const idx = v.tube != null ? v.tube : 0;
     $("#kSw").style.background = TUBE_COLOURS[idx % 3];
 
-    renderActions(v.acts, v.tube);
+    renderActions(v.acts);
 
     const corner = $("#corner");
     corner.className = "corner " + (S.connected ? "ok" : "bad") +
@@ -147,13 +143,15 @@
 
   /* ------------------------------------------------------------- boot */
   function boot() {
+    // `hc` is the bright-room palette, which is the light one. The button
+    // is labelled with what pressing it gives you, not with where you are.
+    const hcLabel = on => (on ? "\u{1F319} Dark mode" : "\u2600\uFE0F Light mode");
     if (store.get("hc", false)) document.body.classList.add("hc");
-    $("#btnHC").textContent = document.body.classList.contains("hc")
-      ? "Normal colours" : "Bright-room colours";
+    $("#btnHC").textContent = hcLabel(document.body.classList.contains("hc"));
     $("#btnHC").onclick = () => {
       const on = document.body.classList.toggle("hc");
       store.set("hc", on);
-      $("#btnHC").textContent = on ? "Normal colours" : "Bright-room colours";
+      $("#btnHC").textContent = hcLabel(on);
     };
 
     wireCorner();

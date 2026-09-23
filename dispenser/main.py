@@ -20,23 +20,31 @@
 #
 #   in   {"c":"hello"}                     identify, report which pins answered
 #        {"c":"time","t":[Y,M,D,h,m,s]}    set the RTC (no battery on this board)
-#        {"c":"sched","i":0,"times":["08:00","20:00"],"label":"...","dose":1}
+#        {"c":"sched","i":0,"every":60,"label":"...","dose":1}   every N minutes
 #        {"c":"pills","i":0,"n":42}        carer has refilled or recounted a tube
-#        {"c":"dispense","i":0}            dispense that tube right now
-#        {"c":"force"}                     fire the next scheduled dose now (demo)
-#        {"c":"taken","i":0}               patient acknowledged the dose
+#        {"c":"dispense","i":0}            drop from that tube now, no waiting
+#        {"c":"force"}                     start the next dose now (demo)
+#        {"c":"present","by":"camera"}     somebody is at the box (the bridge's
+#                                          camera); drops a waiting dose
 #        {"c":"help"}                      patient pressed "I need help"
 #        {"c":"snooze","m":10}             push the current reminder back
 #        {"c":"chime","name":"bells"}       play a sound now (preview)
 #        {"c":"servo","i":0,"a":90}         hold one servo at an angle
 #        {"c":"sweep","i":0}               one gate cycle, no dose logged
-#        {"c":"cfg", ...}                  volume, low_at, patient, gate angles
+#        {"c":"cfg", ...}                  volume, low_at, patient, near_cm, angles
 #        {"c":"state"}                     send a state frame immediately
 #
 #   out  {"e":"state", ...}                the whole picture, about once a second
 #          includes "sonar":{"cm":42.0,"near":true} when the HC-SR04 answers
 #        {"e":"ack","c":"dispense","ok":true}
 #        {"e":"hello", ...}
+#
+# A DOSE
+# When a tube's interval comes round the box plays the chime and WAITS. The
+# servo only moves once somebody is at the box - the ultrasonic sensor, or
+# the camera via the bridge as a backup, whichever sees them first - so a
+# pill never sits in the tray of an empty room. Nobody within missed_after
+# and the dose is logged missed with the pill still in the tube.
 #
 # Ctrl-C at any time drops to the REPL for development; Ctrl-D then restarts
 # this cleanly. The bridge sends exactly that pair when it connects, which is
@@ -50,39 +58,40 @@ import time
 import hardware
 import lcdview
 
-FW = "kairo-1.0"
+FW = "kairo-1.2"
 STATE_FILE = "/kairo.json"
+SCHEMA = 2           # 2: tubes run on an interval ("every"), not clock times
 TUBE_COUNT = 3
 
 # How the box behaves. All overridable from the website with {"c":"cfg"}.
 CONFIG = {
     "patient": "Patient",
     "low_at": 10,          # pills below this and the carer gets warned
-    "remind_every": 180,   # seconds between repeat chimes while a dose waits
-    "remind_limit": 3,     # how many repeats before it is called missed
-    "missed_after": 900,   # seconds after which an untaken dose is missed
+    "remind_every": 30,    # seconds between repeat chimes while a dose waits
+    "remind_limit": 3,     # how many repeat chimes before it stops chiming
+    "missed_after": 120,   # seconds with nobody at the box: the dose is missed
     "volume": 0.35,
     "chime": "jingle",     # which sound plays for a due dose
-    "catch_up": 3600,      # see fire_due() - the safety window, in seconds
+    "near_cm": 80,         # ultrasonic: closer than this is somebody
 }
 
+# Short names and short intervals, so a demo sees doses come round in minutes.
 DEFAULT_TUBES = [
-    {"label": "Metformin", "dose": 1, "times": ["08:00", "20:00"], "count": 42},
-    {"label": "Ramipril", "dose": 1, "times": ["08:00"], "count": 18},
-    {"label": "Atorvastatin", "dose": 1, "times": ["20:00"], "count": 7},
+    {"label": "Aspirin", "dose": 1, "every": 60, "count": 42},
+    {"label": "Vitamin C", "dose": 1, "every": 30, "count": 30},
+    {"label": "Iron", "dose": 1, "every": 5, "count": 12},
 ]
 
 tubes = []
 events = []          # newest last, capped at EVENT_CAP
 EVENT_CAP = 40
 
-mode = "idle"        # idle | dispensing | due | taken
+mode = "idle"        # idle | due | dispensing | taken | empty
 active = None        # which tube the current dose came from
-due_at = 0           # ticks_ms when the dose fired
+due_at = 0           # ticks_ms when the dose came due
 reminders = 0
-taken_until = 0      # ticks_ms to hold the THANK YOU screen until
-fired = {}           # "tube|YYYY-MM-DD HH:MM" -> True, cleared at midnight
-_fired_day = None    # which date the keys in `fired` belong to
+taken_until = 0      # ticks_ms to hold the TAKE YOUR PILL screen until
+next_due = [0] * TUBE_COUNT  # time.time() of each tube's next dose; 0 = none
 seq = 0              # event counter, lets the bridge spot dropped frames
 
 _dirty = False
@@ -103,21 +112,28 @@ def load():
     try:
         with open(STATE_FILE) as f:
             saved = json.load(f)
-        tubes = saved.get("tubes") or []
-        events = saved.get("events") or []
-        for key, value in (saved.get("config") or {}).items():
-            if key in CONFIG:
-                CONFIG[key] = value
     except Exception:
-        tubes = []
+        saved = {}
+    tubes = saved.get("tubes") or []
+    events = saved.get("events") or []
+    # A save from before intervals has clock times and quarter-hour timings,
+    # neither of which means anything now. Those take the new defaults; what
+    # still means the same (name, sound, stock, thresholds) carries over.
+    old = saved.get("v") != SCHEMA
+    for key, value in (saved.get("config") or {}).items():
+        if key in CONFIG and not (old and key in ("remind_every", "missed_after")):
+            CONFIG[key] = value
     # Normalise, so a hand-edited or truncated file cannot crash the loop.
     while len(tubes) < TUBE_COUNT:
         tubes.append(dict(DEFAULT_TUBES[len(tubes)]))
     tubes = tubes[:TUBE_COUNT]
-    for t in tubes:
+    for i, t in enumerate(tubes):
+        if old:
+            t.pop("times", None)
+            t.update({k: v for k, v in DEFAULT_TUBES[i].items() if k != "count"})
         t.setdefault("label", "Medicine")
         t.setdefault("dose", 1)
-        t.setdefault("times", [])
+        t.setdefault("every", 0)
         t.setdefault("count", 0)
 
 
@@ -131,7 +147,7 @@ def save_now():
     global _dirty
     try:
         with open(STATE_FILE, "w") as f:
-            json.dump({"tubes": tubes, "events": events[-EVENT_CAP:],
+            json.dump({"v": SCHEMA, "tubes": tubes, "events": events[-EVENT_CAP:],
                        "config": CONFIG}, f)
         _dirty = False
     except Exception as e:
@@ -197,46 +213,25 @@ def stamp():
     return "%04d-%02d-%02dT%02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
 
 
-def today():
-    t = time.localtime()
-    return "%04d-%02d-%02d" % (t[0], t[1], t[2])
-
-
-def secs_of_day():
-    t = time.localtime()
-    return t[3] * 3600 + t[4] * 60 + t[5]
-
-
-def parse_hhmm(text):
-    """'08:00' -> 28800 seconds. Returns None on anything malformed."""
-    try:
-        hh, mm = str(text).split(":")
-        hh, mm = int(hh), int(mm)
-        if 0 <= hh < 24 and 0 <= mm < 60:
-            return hh * 3600 + mm * 60
-    except Exception:
-        pass
-    return None
+def schedule(i, start=None):
+    """Put tube i's next dose one interval after `start` (default: now)."""
+    every = int(tubes[i].get("every", 0) or 0)
+    next_due[i] = ((time.time() if start is None else start) + every * 60) if every > 0 else 0
 
 
 def next_dose():
     """The soonest upcoming dose: (tube_index, 'HH:MM', seconds_until).
 
-    Returns (None, None, None) if no times are set at all.
+    Returns (None, None, None) if no tube is scheduled.
     """
-    now = secs_of_day()
     best = None
-    for i, tube in enumerate(tubes):
-        for hhmm in tube.get("times", []):
-            target = parse_hhmm(hhmm)
-            if target is None:
-                continue
-            delta = target - now
-            if delta <= 0:
-                delta += 86400          # already gone today, so tomorrow
-            if best is None or delta < best[2]:
-                best = (i, hhmm, delta)
-    return best if best else (None, None, None)
+    for i, at in enumerate(next_due):
+        if at and (best is None or at < next_due[best]):
+            best = i
+    if best is None:
+        return None, None, None
+    t = time.localtime(next_due[best])
+    return best, "%02d:%02d" % (t[3], t[4]), max(0, next_due[best] - time.time())
 
 
 def low_tube():
@@ -252,115 +247,77 @@ def low_tube():
 
 # --- the dose itself ---------------------------------------------------
 
-def do_dispense(tube, reason="scheduled"):
-    """Turn the dial, drop a dose, sound the chime, wait to be acknowledged."""
-    global mode, active, due_at, reminders
+def drop(tube, kind, why):
+    """Swing the gate once per pill, log it, and show TAKE YOUR PILL.
 
-    if not (0 <= tube < len(tubes)):
-        return False
-
+    kind is "taken" for a dose somebody came to the box for, "dispensed"
+    for the carer's button. The count comes down whether or not the servo
+    answered: if the motor is unplugged during a build the count still has
+    to stay honest about what the carer loaded, and an over-count is the
+    more dangerous error of the two.
+    """
+    global mode, active, taken_until
     entry = tubes[tube]
     dose = max(1, int(entry.get("dose", 1)))
+    mode, active = "dispensing", tube
+    push_lcd(force=True)
+    emit(state_frame())
+    moved = hardware.dispense(tube, dose)
+    entry["count"] = max(0, int(entry.get("count", 0)) - dose)
+    mode = "taken"
+    taken_until = time.ticks_add(time.ticks_ms(), 6000)
+    push_lcd(force=True)
+    add_event(kind, tube, {"why": why, "dose": dose, "servo": moved,
+                           "left": entry["count"]})
+    if entry["count"] <= CONFIG["low_at"]:
+        add_event("low", tube, {"left": entry["count"]})
+    return True
+
+
+def start_due(tube, why):
+    """A tube's interval has come round: chime, then wait for somebody."""
+    global mode, active, due_at, reminders
+    active, due_at, reminders = tube, time.ticks_ms(), 0
 
     # Nothing to give. Turning the servo would look like a dose was
     # delivered, log one, and leave the patient waiting for a pill that is
     # not coming - so the machine says so instead and raises it with the
     # carer. The count is not touched.
-    if int(entry.get("count", 0)) <= 0:
-        mode, active = "empty", tube
-        due_at = time.ticks_ms()
+    if int(tubes[tube].get("count", 0)) <= 0:
+        mode = "empty"
         push_lcd(force=True)
-        add_event("empty", tube, {"why": reason})
+        add_event("empty", tube, {"why": why})
         emit(state_frame())
         hardware.chime("alert")
         return False
 
-    mode, active = "dispensing", tube
-    push_lcd(force=True)
-
-    moved = hardware.dispense(tube, dose)
-
-    # The count is decremented whether or not the servo answered. If the
-    # motor is unplugged during a build the schedule still has to stay
-    # honest about what the carer loaded, and an over-count is the more
-    # dangerous error of the two.
-    entry["count"] = max(0, int(entry.get("count", 0)) - dose)
-
     mode = "due"
-    active = tube
-    due_at = time.ticks_ms()
-    reminders = 0
     push_lcd(force=True)
-
     # Publish BEFORE the chime. play_wav() blocks for the length of the file
-    # (jingle5.wav is five seconds), and during that the loop sends nothing -
-    # so without this the website would keep showing "dispensing" until the
-    # tune finished.
+    # (jingle5.wav is five seconds), and during that the loop sends nothing.
     emit(state_frame())
-
     hardware.chime("dose")
-
-    add_event("dispensed", tube, {"dose": dose, "why": reason,
-                                  "servo": moved,
-                                  "left": entry["count"]})
-    if entry["count"] <= CONFIG["low_at"]:
-        add_event("low", tube, {"left": entry["count"]})
-    touch()
-    return True
-
-
-def mark_taken(tube=None, why="button"):
-    global mode, active, taken_until
-    tube = active if tube is None else tube
-    if tube is None:
-        return False
-    add_event("taken", tube, {"why": why})
-    mode = "taken"
-    taken_until = time.ticks_ms() + 4000
-    push_lcd(force=True)
     return True
 
 
 def fire_due():
-    """Fire any dose whose time has arrived and which has not fired yet.
+    """Start the first tube whose interval has come round.
 
-    The catch_up window is a safety rule, not an optimisation. If the box
-    was off at 08:00 and comes back at 14:00, dispensing the morning dose
-    six hours late is worse than skipping it - so anything older than the
-    window is recorded as missed and the pills stay in the tube.
+    One at a time, so two chimes never overlap and each pill waits for its
+    own person. A tube late by a whole interval or more (the box was busy,
+    or off) gets one dose now and carries on from now - never a burst of
+    the doses it missed.
     """
-    global _fired_day
-
-    if not clock_set() or mode in ("dispensing", "due"):
+    if not clock_set() or mode != "idle":
         return
-    now = secs_of_day()
-    day = today()
-
-    # Housekeeping at midnight. The keys carry their own date so a stale one
-    # can never match, but on a box that runs for weeks the dict would grow
-    # without this.
-    if _fired_day != day:
-        fired.clear()
-        _fired_day = day
-
-    for i, tube in enumerate(tubes):
-        for hhmm in tube.get("times", []):
-            target = parse_hhmm(hhmm)
-            if target is None:
-                continue
-            key = "%s %s" % (day, hhmm)
-            key = "%d|%s" % (i, key)
-            if key in fired:
-                continue
-            if now < target:
-                continue
-            if now - target > CONFIG["catch_up"]:
-                fired[key] = True
-                add_event("skipped", i, {"time": hhmm, "why": "outside catch-up"})
-                continue
-            fired[key] = True
-            do_dispense(i, "scheduled %s" % hhmm)
-            return          # one dose at a time, so the chimes never overlap
+    now = time.time()
+    for i in range(len(tubes)):
+        if next_due[i] and now >= next_due[i]:
+            schedule(i, next_due[i])
+            if next_due[i] <= now:
+                schedule(i)
+            start_due(i, "every %d min" % int(tubes[i].get("every", 0)))
+            return
 
 
 def tick_due():
@@ -383,6 +340,7 @@ def tick_due():
 
     waited = time.ticks_diff(time.ticks_ms(), due_at) // 1000
 
+    # Nobody came. Nothing was dropped, so the pill is still in the tube.
     if waited >= CONFIG["missed_after"]:
         add_event("missed", active, {"waited": waited})
         mode, active = "idle", None
@@ -398,25 +356,21 @@ def tick_due():
 # --- presence ----------------------------------------------------------
 
 def sample_presence():
-    """Read the ultrasonic sensor and notice somebody arriving.
+    """Read the ultrasonic sensor, and drop a waiting dose for whoever came.
 
     This is presence, not motion: the sensor reports distance, and a person
-    standing at the box is simply "something close". That is enough for the
-    one question worth answering - did they come to the box after it
-    chimed? - and it is honest about what the hardware can actually tell us.
+    standing at the box is simply "something close". It takes two readings
+    in a row, half a second apart, before a pill drops - one stray echo off
+    a wall must not empty a tube into the tray of an empty room.
     """
     global near, distance_cm
 
     cm = hardware.read_distance()
     was = near
     distance_cm = cm
-    near = cm is not None and cm <= hardware.SONAR_NEAR_CM
-
-    # Only the arrival is worth recording, and only when the box is waiting
-    # for somebody. Logging every approach all day would bury the events
-    # that matter in noise.
-    if near and not was and mode == "due":
-        add_event("approached", active, {"cm": int(cm)})
+    near = cm is not None and cm <= CONFIG["near_cm"]
+    if near and was and mode == "due":
+        drop(active, "taken", "at the box, %d cm" % cm)
 
 
 # --- screens -----------------------------------------------------------
@@ -455,6 +409,7 @@ def push_lcd(force=False):
 
 def state_frame():
     tube, hhmm, gap = next_dose()
+    now = time.time()
     return {
         "e": "state",
         "fw": FW,
@@ -469,8 +424,9 @@ def state_frame():
         "sonar": {"cm": round(distance_cm, 1) if distance_cm is not None else None,
                   "near": near, "present": hardware.present.get("sonar", False)},
         "tubes": [{"label": t.get("label", ""), "dose": t.get("dose", 1),
-                   "times": t.get("times", []), "count": t.get("count", 0)}
-                  for t in tubes],
+                   "every": t.get("every", 0), "count": t.get("count", 0),
+                   "in": max(0, next_due[i] - now) if next_due[i] else None}
+                  for i, t in enumerate(tubes)],
         "hw": {"present": hardware.present, "detail": hardware.detail,
                "servos": list(hardware.servos),
                "pins": list(hardware.SERVO_PINS),
@@ -508,13 +464,13 @@ def handle(cmd):
                 # The weekday field is ignored on the ESP32 port, so a zero
                 # here is harmless and saves the bridge computing it.
                 RTC().datetime((t[0], t[1], t[2], 0, t[3], t[4], t[5], 0))
-                # Only wipe the fired record on the FIRST sync, when the clock
-                # was still at 2000-01-01 and every key in there is nonsense.
-                # The bridge re-syncs periodically to stop the RTC drifting,
-                # and clearing on those would let a dose that already fired
-                # inside the catch-up window fire a second time.
+                # Start the intervals on the FIRST sync only, when the clock
+                # jumps from 2000-01-01 to now. The bridge re-syncs every 15
+                # minutes to stop drift, and restarting on those would keep
+                # pushing a 60-minute tube's dose back forever.
                 if was_unset:
-                    fired.clear()
+                    for i in range(len(tubes)):
+                        schedule(i)
                 push_lcd(force=True)
             except Exception as e:
                 ok, extra = False, {"err": repr(e)}
@@ -524,22 +480,17 @@ def handle(cmd):
     elif name == "sched":
         i = int(cmd.get("i", -1))
         if 0 <= i < len(tubes):
-            if "times" in cmd:
-                clean = []
-                for value in cmd["times"]:
-                    if parse_hhmm(value) is not None and value not in clean:
-                        clean.append(value)
-                clean.sort()
-                tubes[i]["times"] = clean
             if "label" in cmd:
                 tubes[i]["label"] = str(cmd["label"])[:24]
             if "dose" in cmd:
                 tubes[i]["dose"] = max(1, min(9, int(cmd["dose"])))
-            # Note what is NOT here: the fired record is left alone. Clearing
-            # it would re-arm times that have already gone off today, so a
-            # carer fixing a typo in a label at 08:30 would trigger a second
-            # 08:00 dose. Newly added times have no key yet, so they arm on
-            # their own.
+            # A new interval counts from now. Only a changed one, though: a
+            # carer fixing a typo in the name must not move the next dose.
+            if "every" in cmd:
+                every = max(0, min(1440, int(cmd["every"])))
+                if every != tubes[i].get("every"):
+                    tubes[i]["every"] = every
+                    schedule(i)
             touch()
             push_lcd(force=True)
         else:
@@ -556,14 +507,34 @@ def handle(cmd):
             ok = False
 
     elif name == "dispense":
-        ok = do_dispense(int(cmd.get("i", 0)), "manual")
+        # The carer's button: drop now, no waiting. On the tube that is
+        # waiting it releases that dose; otherwise only while idle, so it can
+        # never cut across somebody else's dose.
+        i = int(cmd.get("i", 0))
+        if not (0 <= i < len(tubes)) or int(tubes[i].get("count", 0)) <= 0:
+            ok = False
+        elif mode == "due" and i == active:
+            drop(i, "taken", "released by the carer")
+        elif mode == "idle":
+            drop(i, "dispensed", "by the carer")
+        else:
+            ok, extra = False, {"err": "busy"}
 
     elif name == "force":
-        tube, hhmm, _gap = next_dose()
-        ok = do_dispense(tube if tube is not None else 0, "forced %s" % hhmm)
+        tube, _hhmm, _gap = next_dose()
+        if mode != "idle" or tube is None:
+            ok = False
+        else:
+            schedule(tube)          # the one after counts from this one
+            ok = start_due(tube, "started by the carer")
 
-    elif name == "taken":
-        ok = mark_taken(cmd.get("i"), cmd.get("why", "button"))
+    elif name == "present":
+        # The bridge's camera saw somebody - the backup for when the
+        # ultrasonic misses them. Only a waiting dose cares.
+        if mode == "due":
+            drop(active, "taken", "at the box, seen by the %s" % cmd.get("by", "camera"))
+        else:
+            ok = False
 
     elif name == "snooze":
         minutes = max(1, min(60, int(cmd.get("m", 10))))
@@ -600,9 +571,11 @@ def handle(cmd):
 
     elif name == "cfg":
         for key in ("patient", "low_at", "remind_every", "remind_limit",
-                    "missed_after", "catch_up"):
+                    "missed_after"):
             if key in cmd:
                 CONFIG[key] = cmd[key]
+        if "near_cm" in cmd:
+            CONFIG["near_cm"] = max(10, min(400, int(cmd["near_cm"])))
         if "volume" in cmd:
             CONFIG["volume"] = max(0.0, min(1.0, float(cmd["volume"])))
         if "chime" in cmd:
@@ -671,6 +644,12 @@ def run():
     load()
     hardware.probe()
     apply_sound()
+    # A soft reset keeps the RTC, so the clock may already be right; then the
+    # intervals start from now. Otherwise they start on the bridge's first
+    # time sync - see handle("time").
+    if clock_set():
+        for i in range(len(tubes)):
+            schedule(i)
     push_lcd(force=True)
     emit({"e": "hello", "fw": FW, "tubes": TUBE_COUNT,
           "hw": hardware.present, "detail": hardware.detail,

@@ -15,6 +15,10 @@ const K = (() => {
   const pad = n => String(n).padStart(2, "0");
   const escAttr = s => String(s).replace(/[&"<>]/g,
     c => ({ "&": "&amp;", '"': "&quot;", "<": "&lt;", ">": "&gt;" }[c]));
+  /* innerHTML, but only when it changed. Pages repaint ten times a second,
+     and a button replaced between mousedown and mouseup never gets its
+     click - which is why Dismiss and Refill used to need a second press. */
+  const setHtml = (el, html) => { if (el._html !== html) el.innerHTML = el._html = html; };
 
   /* Tube identity, used everywhere a tube is named. */
   const TUBE_COLOURS = ["#4fe0bd", "#6aa6ff", "#a98bfa"];
@@ -33,12 +37,6 @@ const K = (() => {
   };
 
   /* ------------------------------------------------------------- time */
-  function hhmmToSec(t) {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ""));
-    if (!m) return null;
-    const h = +m[1], mm = +m[2];
-    return (h < 24 && mm < 60) ? h * 3600 + mm * 60 : null;
-  }
   /* Precise, for the carer: 4:52:31. */
   function fmtGap(sec) {
     if (sec == null) return "--";
@@ -61,6 +59,12 @@ const K = (() => {
     if (hrs < 24) return hrs + "h " + pad(mins % 60) + "m";
     return Math.floor(hrs / 24) + "d " + pad(hrs % 24) + "h";
   }
+  /* Wall-clock ISO, "2026-09-23T16:02:18". The board stamps events in local
+     time (the bridge sets its clock from this PC) and everything here reads
+     them that way, so whatever the browser stamps must be local too -
+     toISOString() is UTC, which put demo events hours out of place. */
+  const localIso = (d = new Date()) =>
+    new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
   function fmtWhen(iso) {
     if (!iso) return "";
     return (String(iso).split("T")[1] || "").slice(0, 5);
@@ -81,9 +85,9 @@ const K = (() => {
     if (v.mode === "empty")      return [lcdFit("TUBE " + ((v.tube || 0) + 1) + " EMPTY"), lcdFit("CARER ALERTED")];
     if (v.mode === "due") {
       const label = String(v.label || "Medicine").slice(0, 11).padEnd(11, " ");
-      return [lcdFit("TAKE NOW  TUBE" + ((v.tube || 0) + 1)), lcdFit(label + " x" + (v.dose || 1))];
+      return [lcdFit("COME TO THE BOX"), lcdFit(label + " x" + (v.dose || 1))];
     }
-    if (v.mode === "taken")      return [lcdFit("THANK YOU"), lcdFit("DOSE LOGGED")];
+    if (v.mode === "taken")      return [lcdFit("TAKE YOUR PILL"), lcdFit("FROM THE TRAY")];
     if (!v.next_hhmm)            return [lcdFit("KAIRO  READY"), lcdFit("NO DOSES SET")];
     return [lcdFit("NEXT " + v.next_hhmm + "  T" + ((v.tube || 0) + 1)),
             lcdFit("IN " + humanGap(v.next_in))];
@@ -182,7 +186,7 @@ const K = (() => {
       if (seen.includes(id)) return;
       seen.push(id); if (seen.length > 400) seen.shift();
       store.set("histSeen", seen);
-      const day = String(ev.at || new Date().toISOString()).slice(0, 10);
+      const day = String(ev.at || localIso()).slice(0, 10);
       const row = this.data[day] || (this.data[day] = { due: 0, taken: 0, missed: 0 });
       if (ev.k === "taken")  { row.taken++; row.due++; }
       if (ev.k === "missed") { row.missed++; row.due++; }
@@ -192,14 +196,14 @@ const K = (() => {
       const out = [];
       for (let back = 13; back >= 0; back--) {
         const d = new Date(); d.setDate(d.getDate() - back);
-        const row = this.data[d.toISOString().slice(0, 10)] || { due: 0, taken: 0, missed: 0 };
+        const row = this.data[localIso(d).slice(0, 10)] || { due: 0, taken: 0, missed: 0 };
         out.push({ back, ...row });
       }
       return out;
     },
   };
 
-  return { $, $$, clamp, pad, escAttr, TUBE_COLOURS, CAPACITY, store,
-           hhmmToSec, fmtGap, humanGap, fmtWhen,
+  return { $, $$, clamp, pad, escAttr, setHtml, TUBE_COLOURS, CAPACITY, store,
+           fmtGap, humanGap, fmtWhen, localIso,
            lcdFit, lcdRender, paintLcd, beep, toast, Notify, Hist };
 })();

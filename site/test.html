@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kairo — testing</title>
+<meta name="theme-color" content="#06080b">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%230a0e14'/><circle cx='32' cy='32' r='17' fill='none' stroke='%23ffbe55' stroke-width='6' stroke-dasharray='80 27' stroke-linecap='round' transform='rotate(-90 32 32)'/></svg>">
+<link rel="stylesheet" href="app/theme.css">
+<link rel="stylesheet" href="app/carer.css">
+</head>
+<body>
+
+<!-- The hardware bench: everything that moves a servo or pokes the board
+     outside a real dose. Kept off the carer console on purpose. -->
+<div class="wrap">
+<header class="top">
+  <div class="brand"><div><h1>Kairo testing</h1><span class="by">Hardware bench · not for the carer</span></div></div>
+  <span class="spacer"></span>
+  <a class="chip" href="index.html">← Carer console</a>
+  <span class="chip demo" id="srcChip"><span class="dot"></span><span id="srcTxt">Demo data</span></span>
+</header>
+
+<main class="grid">
+  <section class="card span6">
+    <h2>Dose</h2>
+    <p class="sub" id="doseSub">—</p>
+    <button class="btn primary" id="btnForce"
+            title="Chime now and wait for somebody, as if the timer had come round">Start next dose now</button>
+  </section>
+
+  <section class="card span6">
+    <h2>Presence</h2>
+    <p class="sub">Either one drops a waiting pill: two close ultrasonic readings, or a camera frame 40% sure of a person</p>
+    <div class="hw" id="presRows"></div>
+  </section>
+
+  <section class="card">
+    <h2>Gates</h2>
+    <p class="sub">Dispense drops a pill now and counts it. Test gate swings the gate once and logs nothing.</p>
+    <div class="hw" id="gates"></div>
+  </section>
+
+  <section class="card span6">
+    <h2>On the box</h2>
+    <div class="lcd-wrap">
+      <div class="bezel"><div class="lcd" id="lcd" aria-live="polite"></div></div>
+      <div class="lcd-cap">HD44780 · 16×2 · I²C 0x27 · SDA 14 / SCL 42</div>
+    </div>
+    <div class="hw" id="hwList" style="margin-top:18px"></div>
+  </section>
+
+  <section class="card span6">
+    <div class="hdr">
+      <div><h2>Device console</h2></div>
+      <button class="btn sm ghost" id="btnProbe">Re-probe pins</button>
+    </div>
+    <div class="term" id="term"></div>
+  </section>
+</main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="sr" id="live" aria-live="assertive"></div>
+
+<script src="app/core.js"></script>
+<script src="app/device.js"></script>
+<script src="app/test.js"></script>
+</body>
+</html>

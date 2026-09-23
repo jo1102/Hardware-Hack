@@ -16,6 +16,7 @@
 #   servo 1 / 2 / 3   GPIO21, GPIO38, GPIO39
 #   LCD 1602 (I2C)    SDA 14 / SCL 42, address 0x27
 #   I2S amplifier     BCK 2 / LCK 41 / DIN 48
+#   HC-SR04 sonar     TRIG 11 / ECHO 12 (ECHO via a divider - see below)
 #   PWM speaker       GPIO47 (through the NPN transistor) - alternative to I2S
 #                     note: square waves only, so it cannot play a WAV
 #
@@ -23,8 +24,8 @@
 # stalled, which on its own browns out the board and makes it fall off USB
 # entirely. Three of them need their own 5V supply with a shared ground, and
 # that is not optional. dispense() only ever drives one servo at a time,
-# creeps a degree at a time, and releases the PWM afterwards - that keeps the
-# peak down, but it does not make bad power survivable.
+# creeps a degree at a time, and stops the pulses afterwards so it goes slack
+# - that keeps the peak down, but it does not make bad power survivable.
 
 import time
 
@@ -57,24 +58,30 @@ BACK_MS = 140     # pause after closing, before any second sweep
 # DANGER: the HC-SR04's ECHO pin drives 5V. ESP32 GPIOs are 3.3V and are NOT
 # 5V tolerant, so ECHO must go through a divider or it will damage the pin:
 #
-#     ECHO ---[ 1k ]---+--- GPIO40
+#     ECHO ---[ 1k ]---+--- GPIO12
 #                      |
 #                    [ 2k ]
 #                      |
 #                     GND
 #
 # TRIG needs no divider - 3.3V is enough to trigger the module. VCC must be
-# 5V; the module does not work reliably at 3.3V.
+# 5V; the module does not work reliably at 3.3V, and the breadboard power
+# rails need a jumper from the board's 5V and GND pins or they are just dead
+# copper.
 #
-# Pins: everything else on this board is taken. 21/38/39 are the gate
-# servos, 14/42 the LCD, 2/41/48 the amplifier, 47 the alternate speaker,
-# 4-18 the camera ribbon, 26-37 the PSRAM, 19/20 USB, 43/44 the console and
-# 0/45/46 strapping. That leaves 1 and 40.
+# WHY 11 AND 12, NOT 14
+# GPIO14 is the LCD's I2C SDA line. Sharing it would fight the display, so
+# the sensor moves and the LCD keeps the pin it needs. 11 and 12 sit in the
+# Freenove camera ribbon block (4-18), which only matters while that ribbon
+# is attached - and it is not, because the camera in this project is the
+# XIAO on its own board. If you ever reattach the Freenove camera, these two
+# have to move again; 1 and 40 are the fallback pair that nothing else wants.
 
-SONAR_TRIG = 1
-SONAR_ECHO = 40
-SONAR_NEAR_CM = 80        # closer than this counts as "somebody is here"
+SONAR_TRIG = 11
+SONAR_ECHO = 12
 SONAR_MAX_CM = 400        # HC-SR04 range ceiling; further reads as nothing
+# How close counts as "somebody is here" is CONFIG["near_cm"] in main.py, so
+# the carer can move it and the box, the console and the log all agree.
 
 # --- other peripherals -------------------------------------------------
 
@@ -165,17 +172,17 @@ def probe():
             servos[i] = False
             continue
         try:
-            # Claim the pin to prove it takes PWM, then drop it again. Note
-            # what this does NOT tell us: whether a servo is actually wired
-            # to it. Nothing on the board can sense that - the Test gate
-            # button on the website is the only real check.
-            Servo(pin).release()
-            _servo[i] = None
+            # One Servo per pin, kept for the life of the program, so each
+            # holds its own LEDC channel - Servo.release() says what sharing
+            # one used to do. Claiming the pin proves it takes PWM and NOT
+            # that a servo is wired to it; nothing on the board can sense
+            # that, so the Test gate button is the only real check.
+            if _servo[i] is None:
+                _servo[i] = Servo(pin)
             _at[i] = SERVO_CLOSED[i]
             servos[i] = True
             from_servo.append("T%d:%d" % (i + 1, pin))
         except Exception as e:
-            _servo[i] = None
             servos[i] = False
             from_servo.append("T%d:%d?" % (i + 1, pin))
             detail["servo"] = repr(e)
@@ -281,24 +288,9 @@ def lcd_write(line0, line1):
 
 # --- servos ------------------------------------------------------------
 
-def _acquire(i):
-    """Create a fresh PWM for one servo.
-
-    Servo.release() calls PWM.deinit(), and a de-initialised PWM rejects
-    every later duty_ns() write - so the object cannot be kept across a
-    release. Since releasing between doses is exactly what keeps the peak
-    current down, the PWM is built per movement instead of held open.
-    """
-    from servo import Servo
-    s = Servo(SERVO_PINS[i])
-    _servo[i] = s
-    return s
-
-
 def _release(i):
-    """Let the servo go slack and drop the dead PWM object."""
+    """Let the servo go slack. The Servo itself is kept - see probe()."""
     s = _servo[i]
-    _servo[i] = None
     if s is not None:
         try:
             s.release()
@@ -340,10 +332,9 @@ def dispense(tube, pills=1):
     is how you get three pills out of a two-pill dose.
     """
     i = tube % len(SERVO_PINS)
-    if not servos[i]:
+    if not servos[i] or _servo[i] is None:
         return False
     try:
-        _acquire(i)
         for _ in range(max(1, min(9, int(pills)))):
             _sweep_once(i)
         return True
@@ -368,10 +359,9 @@ def sweep(tube):
 def servo_to(tube, angle):
     """Hold one servo at an angle, for calibrating CLOSED and OPEN."""
     i = (tube or 0) % len(SERVO_PINS)
-    if not servos[i]:
+    if not servos[i] or _servo[i] is None:
         return False
     try:
-        _acquire(i)
         _creep(i, angle)
         time.sleep_ms(200)
         return True

@@ -2,6 +2,12 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 
+// The Check-in webcam: an 800x600 stream over WiFi, as CameraWebServer always
+// was. Person detection runs on the laptop instead (site/bridge.py, YOLOX) -
+// a model small enough for this chip could not tell a person from an empty
+// room. Over USB it only says where its stream is, every two seconds, so the
+// bridge never has to search the network for it.
+
 // ===========================
 // Select camera model in board_config.h
 // ===========================
@@ -104,12 +110,12 @@ void setup() {
     s->set_brightness(s, 1);   // up the brightness just a bit
     s->set_saturation(s, -2);  // lower the saturation
   }
-  // drop down frame size for higher initial frame rate
+  // 800x600: sharp enough to see a face across the room, and still quick -
+  // the sensor compresses each frame itself. Higher quality number = more
+  // compression = higher FPS; 12 was picked in the web UI on 2026-09-04.
   if (config.pixel_format == PIXFORMAT_JPEG) {
-    s->set_framesize(s, FRAMESIZE_QVGA);
-    s->set_quality(s, 12);  // higher number = more compression = higher FPS
-                            // (was 4/best-quality by default; 12 matches the
-                            // setting picked in the web UI on 2026-09-04)
+    s->set_framesize(s, FRAMESIZE_SVGA);
+    s->set_quality(s, 12);
   }
 
 #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
@@ -126,25 +132,22 @@ void setup() {
   setupLedFlash();
 #endif
 
+  // No waiting for WiFi: the USB line below has to keep coming either way.
+  // The server listens on every interface, so it answers once an address
+  // arrives.
   WiFi.begin(ssid, password);
   WiFi.setSleep(false);
-
-  Serial.print("WiFi connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected");
-
   startCameraServer();
-
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
 }
 
 void loop() {
-  // Do nothing. Everything is done in another task by the web server
-  delay(10000);
+  static bool told = false;
+  if (!told && WiFi.isConnected()) {
+    told = true;
+    Serial.printf("Camera Ready! Use 'http://%s' to connect\n", WiFi.localIP().toString().c_str());
+  }
+  // ip is "" until it has joined the network.
+  Serial.printf("{\"type\":0,\"name\":\"WIFI\",\"code\":0,\"data\":{\"ip\":\"%s\"}}\n",
+                WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "");
+  delay(2000);
 }

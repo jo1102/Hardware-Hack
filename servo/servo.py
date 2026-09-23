@@ -17,9 +17,10 @@ MAX_NS = 2_500_000  # 2.5ms -> 180 degrees
 
 class Servo:
     def __init__(self, pin, freq=50):
+        # Silent from the start: no pulses until angle() says where to go,
+        # so claiming the pin never twitches the arm.
         self._pwm = PWM(Pin(pin), freq=freq)
-        self._pin = pin
-        
+        self._pwm.duty_ns(0)
 
     def angle(self, degrees):
         """Move to an angle between 0 and 180."""
@@ -41,5 +42,12 @@ class Servo:
         return self._pwm.duty_ns()
 
     def release(self):
-        """Stop driving the pin so the servo goes slack."""
-        self._pwm.deinit()
+        """Stop the pulses so the servo goes slack. Can move again any time.
+
+        Deliberately not PWM.deinit(). That frees the LEDC channel but leaves
+        the pin wired to it, the next servo - on ANY pin - is handed the same
+        channel, and every "released" pin then copies its pulses: one
+        dispense swung all three gates. A zero duty is just as slack (no
+        pulses, no holding current) and this pin keeps its own channel.
+        """
+        self._pwm.duty_ns(0)

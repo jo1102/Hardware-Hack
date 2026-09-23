@@ -8,20 +8,27 @@
 "use strict";
 
 (() => {
-  const { $, $$, clamp, escAttr, store, TUBE_COLOURS, CAPACITY,
-          fmtGap, humanGap, fmtWhen, lcdRender, paintLcd, beep, toast,
+  const { $, $$, clamp, escAttr, setHtml, store, TUBE_COLOURS, CAPACITY,
+          fmtGap, humanGap, fmtWhen, beep, toast,
           Notify, Hist } = K;
   const { App, Bridge, send, liveGap, setSource, setBase, start,
           markSourceTouched } = Kairo;
 
   let view = "dashboard";
-  let refillFor = null;                  // which tube the refill drawer is on
   let dismissed = new Set(store.get("dismissed", []));
   let lastAlertIds = new Set();
-  let edHash = "";
+  const TITLE = document.title;
 
   const tubeName = (S, i) =>
     (S.tubes[i] && S.tubes[i].label) || "Tube " + (i + 1);
+
+  // Tubes run on an interval in minutes: "every hour", "every 5 min".
+  const fmtEvery = m => !m ? "not scheduled" : m % 60 ? "every " + m + " min"
+    : m === 60 ? "every hour" : "every " + m / 60 + " hours";
+  // How long a tube's stock lasts at its interval, in minutes, or null.
+  const stockMins = t => t.every > 0 ? (+t.count || 0) / Math.max(1, t.dose || 1) * t.every : null;
+  const fmtSpan = m => m >= 2880 ? Math.floor(m / 1440) + " days" : m >= 120
+    ? Math.floor(m / 60) + " hours" : m >= 60 ? "1 hour" : Math.floor(m) + " min";
 
   /* ================================================================== *
    * ALERTS
@@ -33,58 +40,57 @@
     const out = [];
     const lowAt = (S.cfg && S.cfg.low_at) || 10;
 
+    // `act` is the one button that resolves the alert; see #alertList below.
     if (!S.connected) {
       out.push({ id: "offline", sev: "bad", ic: "⚡",
         title: "Dispenser not connected",
-        body: S.error || "The bridge cannot reach the board." });
+        body: S.error || "", act: "Connection" });
       return out;                       // nothing else is knowable
     }
     if (!S.clock_set) {
       out.push({ id: "clock", sev: "warn", ic: "◷",
         title: "The box does not know the time",
-        body: "No doses will fire until the clock is set. It syncs on its own within a few seconds." });
+        body: "No doses fire until it does. It syncs on its own in a few seconds." });
     }
 
-    S.tubes.forEach((t, i) => {
-      const count = +t.count || 0;
-      const perDay = (t.times || []).length * (t.dose || 1);
-      const days = perDay ? Math.floor(count / perDay) : null;
-      if (count === 0) {
-        out.push({ id: "empty:" + i, sev: "bad", ic: "⊘",
-          title: tubeName(S, i) + " is empty",
-          body: "The next dose cannot be dispensed.", refill: i });
-      } else if (count <= lowAt) {
-        out.push({ id: "low:" + i, sev: "warn", ic: "▾",
-          title: tubeName(S, i) + " is running low",
-          body: count + " pills left" +
-                (days != null ? " — about " + days + (days === 1 ? " day" : " days") + " of doses" : ""),
-          refill: i });
-      }
-    });
-
     // Anything the box has raised in the last few hours that a person
-    // should actually respond to.
+    // should actually respond to. First, so a call for help heads the list.
     const now = Date.now();
     (S.events || []).forEach(ev => {
       const age = ev.at ? (now - Date.parse(ev.at)) : 0;
       if (age > 6 * 3600 * 1000) return;
       if (ev.k === "help") {
-        out.push({ id: "help:" + ev.at, sev: "bad", ic: "☎",
-          title: "They pressed “I need help”",
-          body: "At " + fmtWhen(ev.at) + " on the patient screen." });
+        out.push({ id: "help:" + ev.at, sev: "bad", ic: "☎", at: ev.at, act: "Check in",
+          title: "Help requested",
+          body: "They pressed “I need help” on the patient screen." });
       }
       if (ev.k === "missed") {
-        out.push({ id: "missed:" + ev.at + ":" + ev.i, sev: "warn", ic: "✕",
-          title: "A dose was not taken",
-          body: (ev.label || "Tube " + ((ev.i ?? 0) + 1)) + ", due around " + fmtWhen(ev.at) + "." });
+        out.push({ id: "missed:" + ev.at + ":" + ev.i, sev: "warn", ic: "✕", at: ev.at,
+          title: "Dose not taken",
+          body: (ev.label || "Tube " + ((ev.i ?? 0) + 1)) + " — nobody came to the box" });
       }
     });
 
+    S.tubes.forEach((t, i) => {
+      const count = +t.count || 0, left = stockMins(t);
+      if (count === 0) {
+        out.push({ id: "empty:" + i, sev: "bad", ic: "⊘", i, act: "Refill",
+          title: tubeName(S, i) + " is empty",
+          body: "The next dose cannot be dispensed." });
+      } else if (count <= lowAt) {
+        out.push({ id: "low:" + i, sev: "warn", ic: "▾", i, act: "Refill",
+          title: tubeName(S, i) + " is running low",
+          body: count + " left" + (left != null ? ", about " + fmtSpan(left) : "") });
+      }
+    });
+
+    // A gate that failed stays failed until the pins are probed again - the
+    // tube's own Test gate button is disabled for exactly that reason.
     const servos = (S.hw && S.hw.servos) || [];
     servos.forEach((ok, i) => {
-      if (ok === false) out.push({ id: "servo:" + i, sev: "warn", ic: "⚙",
+      if (ok === false) out.push({ id: "servo:" + i, sev: "warn", ic: "⚙", act: "Re-probe",
         title: "Tube " + (i + 1) + " gate did not respond",
-        body: "Check the servo wiring, then use Test gate on that tube." });
+        body: "Check the servo wiring, then re-probe." });
     });
 
     return out;
@@ -100,7 +106,9 @@
     dismissed.forEach(id => { if (!ids.has(id)) { dismissed.delete(id); changed = true; } });
     if (changed) store.set("dismissed", [...dismissed]);
 
-    const live = all.filter(a => !dismissed.has(a.id));
+    // Worst first, so the top row is always the thing to do next.
+    const live = all.filter(a => !dismissed.has(a.id))
+                    .sort((a, b) => (b.sev === "bad") - (a.sev === "bad"));
 
     // Notify only on genuinely new alerts.
     live.forEach(a => {
@@ -111,85 +119,42 @@
     });
     lastAlertIds = new Set(live.map(a => a.id));
 
-    const card = $("#alerts");
-    const worst = live.some(a => a.sev === "bad") ? "bad"
-                : live.length ? "hot" : "calm";
-    card.className = "card alerts " + worst;
+    // The count rides in the tab title, so it shows while the tab is behind.
+    document.title = (live.length ? "(" + live.length + ") " : "") + TITLE;
 
-    const badge = $("#alertBadge");
-    badge.hidden = live.length === 0;
-    badge.textContent = String(live.length);
-    $("#alertCount").textContent = live.length
-      ? live.length + (live.length === 1 ? " thing needs" : " things need") + " you"
-      : "Nothing needs you";
+    $("#alerts").className = "card alerts " +
+      (live.some(a => a.sev === "bad") ? "bad" : live.length ? "hot" : "calm");
+    $("#alertHead").textContent = !live.length ? "All clear — nothing needs you"
+      : live.length === 1 ? "1 thing needs you" : live.length + " things need you";
 
-    const host = $("#alertList");
-    if (!live.length) {
-      host.innerHTML = '<li><div class="calm-note"><span class="ic">✓</span>' +
-        '<span>All three tubes have stock, doses are being taken, and the box is online.</span></div></li>';
-      if (refillFor !== null) { refillFor = null; renderRefill(S); }
-      return;
-    }
-
-    host.innerHTML = live.map(a => {
-      const acts = [];
-      if (a.refill != null) acts.push(
-        '<button class="btn sm primary" data-refill="' + a.refill + '">Refill</button>');
-      acts.push('<button class="btn sm ghost" data-dismiss="' + escAttr(a.id) + '">Dismiss</button>');
-      return '<li class="alert sev-' + a.sev + '">' +
+    setHtml($("#alertList"), live.map(a =>
+      '<li class="alert sev-' + a.sev + '">' +
         '<span class="ic">' + a.ic + '</span>' +
-        '<span class="tx"><b>' + escAttr(a.title) + '</b><span>' + escAttr(a.body) + '</span></span>' +
-        '<span class="go">' + acts.join("") + '</span></li>';
-    }).join("");
-  }
-
-  /* The refill drawer. Inline under the alerts, so the carer acts where
-     they were told about the problem rather than hunting for a field. */
-  function renderRefill(S) {
-    const host = $("#refillBox");
-    if (refillFor === null) { host.hidden = true; host.innerHTML = ""; return; }
-    const i = refillFor, t = S.tubes[i] || {};
-    host.hidden = false;
-    if (host.dataset.tube === String(i)) return;   // do not clobber typing
-    host.dataset.tube = String(i);
-    host.innerHTML =
-      '<div class="f"><label class="fl" for="refillN">' + escAttr(tubeName(S, i)) + '</label>' +
-      '<input type="number" id="refillN" min="0" max="999" value="' + CAPACITY + '"></div>' +
-      '<div class="quick">' +
-        '<button class="btn sm ghost" data-add="10">+10</button>' +
-        '<button class="btn sm ghost" data-add="30">+30</button>' +
-        '<button class="btn sm ghost" data-set="' + CAPACITY + '">Full (' + CAPACITY + ')</button>' +
-      '</div>' +
-      '<button class="btn primary" data-save-refill>Save count</button>' +
-      '<button class="btn ghost" data-cancel-refill>Cancel</button>';
+        '<span class="tx"><b>' + escAttr(a.title) + '</b>' +
+          (a.body ? '<span>' + escAttr(a.body) + '</span>' : "") + '</span>' +
+        (a.at ? '<span class="when">' + escAttr(fmtWhen(a.at)) + '</span>' : "") +
+        (a.act ? '<button class="btn sm' + (a.sev === "bad" ? " primary" : "") + '" data-act="' +
+                 a.act + '" data-i="' + (a.i ?? "") + '">' + a.act + '</button>' : "") +
+        '<button class="x" data-dismiss="' + escAttr(a.id) + '" title="Dismiss" aria-label="Dismiss">×</button>' +
+      '</li>').join(""));
   }
 
   $("#alertList").addEventListener("click", e => {
-    const S = App.S; if (!S) return;
-    const refill = e.target.closest("[data-refill]");
     const dis = e.target.closest("[data-dismiss]");
-    if (refill) { refillFor = +refill.dataset.refill; $("#refillBox").dataset.tube = ""; renderRefill(S); }
     if (dis) {
       dismissed.add(dis.dataset.dismiss);
       store.set("dismissed", [...dismissed]);
-      renderAlerts(S);
+      return renderAlerts(App.S);
     }
-  });
-
-  $("#refillBox").addEventListener("click", async e => {
-    const S = App.S; if (!S || refillFor === null) return;
-    const field = $("#refillN");
-    const add = e.target.closest("[data-add]");
-    const set = e.target.closest("[data-set]");
-    if (add) field.value = String(clamp((+field.value || 0) + +add.dataset.add, 0, 999));
-    if (set) field.value = set.dataset.set;
-    if (e.target.closest("[data-cancel-refill]")) { refillFor = null; renderRefill(S); }
-    if (e.target.closest("[data-save-refill]")) {
-      const n = clamp(+field.value || 0, 0, 999);
-      await send({ c: "pills", i: refillFor, n }, "save the pill count");
-      toast("good", "＋", "Count saved", tubeName(S, refillFor) + " set to " + n + " pills.");
-      refillFor = null; renderRefill(S); edHash = "";
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    const act = b.dataset.act, i = +b.dataset.i;
+    if (act === "Refill") {
+      openForm(i, "refill");
+      $("#tubeCards").children[i].scrollIntoView({ behavior: "smooth", block: "center" });
     }
+    if (act === "Check in") setView("camera");
+    if (act === "Connection") $("#conn").showPopover();
+    if (act === "Re-probe") send({ c: "probe" }, "re-probe the pins");
   });
 
   /* ================================================================== *
@@ -208,7 +173,7 @@
     let ratio = 0, ringCol = colour, lab = "Next dose in", big = "--", sml = "";
 
     if (!S.connected) {
-      lab = "Device"; big = "Offline"; sml = S.error || "not connected";
+      lab = "Device"; big = "Offline"; sml = S.error || "";
       ringCol = "#ff6f70"; ratio = 1;
     } else if (!S.clock_set) {
       lab = "Clock"; big = "Not set"; sml = "waiting for the bridge";
@@ -221,24 +186,26 @@
       lab = "Dispensing"; big = "Now";
       sml = "tube " + ((S.active ?? 0) + 1) + " turning"; ratio = 1;
     } else if (S.mode === "due") {
+      // The chime has played and the pill is still in the tube: it drops
+      // when somebody comes to the box (the panel on the right).
       const w = S.waited || 0;
-      lab = w < 0 ? "Reminder in" : "Waiting to be taken";
+      lab = w < 0 ? "Reminder in" : "Waiting at the box";
       big = fmtGap(Math.abs(w));
-      sml = w < 0 ? "snoozed" : "dispensed, not yet taken";
+      sml = w < 0 ? "snoozed" : "drops when somebody comes";
       ringCol = "#ff6f70"; ratio = 1;
     } else if (S.mode === "taken") {
-      lab = "Logged"; big = "Done"; sml = "thank you"; ringCol = "#4fe0bd"; ratio = 1;
+      lab = "Dropped"; big = "Done"; sml = "pill in the tray"; ringCol = "#4fe0bd"; ratio = 1;
     } else if (gap == null) {
-      lab = "Schedule"; big = "Empty"; sml = "add a dose time below";
+      lab = "Schedule"; big = "Off"; sml = "no tube has an interval";
       ringCol = "#65728a"; ratio = 0;
     } else {
       big = fmtGap(gap);
       sml = "at " + (S.next.at || "--:--");
-      // The arc fills over the last twelve hours before a dose, so its
-      // shape carries information rather than just spinning.
-      ratio = clamp(1 - gap / (12 * 3600), 0, 1);
-      if (gap < 3600) ringCol = "#ffbe55";
-      if (gap < 300)  ringCol = "#ff6f70";
+      // The arc fills over the tube's interval, so its shape carries
+      // information rather than just spinning.
+      const every = ((S.tubes[idx] || {}).every || 60) * 60;
+      ratio = clamp(1 - gap / every, 0, 1);
+      if (gap < 60) ringCol = "#ffbe55";
     }
 
     const C = 2 * Math.PI * 43;
@@ -250,13 +217,11 @@
     $("#ringBig").textContent = big;
     $("#ringSml").textContent = sml || " ";
 
-    const times = idx != null && S.tubes[idx] ? (S.tubes[idx].times || []) : [];
-    $("#heroAt").textContent = times.length
-      ? times.join(" · ") + " · " + times.length + "× a day"
-      : "No dose times set";
+    const t = (idx != null && S.tubes[idx]) || {};
+    $("#heroAt").textContent = t.every
+      ? fmtEvery(t.every) + " · " + (t.dose || 1) + " pill" + ((t.dose || 1) > 1 ? "s" : "")
+      : "No interval set";
 
-    $("#btnForce").textContent = S.mode === "due" ? "Mark as taken" : "Dispense next dose";
-    $("#btnForce").disabled = !S.connected || S.mode === "dispensing";
   }
 
   /* ================================================================== *
@@ -276,11 +241,11 @@
       demo ? "Demo data" : (due ? "From the box" : "Collecting");
     $("#adhSub").textContent = demo
       ? "Simulated fortnight, so the panel has something to show"
-      : "Counted only from events the box has reported to this browser";
+      : "Doses taken on time";
 
     if (!due) {
-      $("#stAdh").textContent = "—"; $("#stAdhN").textContent = "no doses recorded yet";
-      $("#stMiss").textContent = "—"; $("#stMissN").textContent = "nothing to report";
+      $("#stAdh").textContent = "—"; $("#stAdhN").textContent = "";
+      $("#stMiss").textContent = "—"; $("#stMissN").textContent = "";
     } else {
       $("#stAdh").textContent = Math.round(taken / due * 100) + "%";
       $("#stAdhN").textContent = taken + " of " + due + " doses";
@@ -288,10 +253,9 @@
       $("#stMissN").textContent = missed === 0 ? "none missed" : "last 14 days";
     }
 
-    const todayDue = S.tubes.reduce((a, t) => a + (t.times || []).length, 0);
-    const takenToday = (S.events || []).filter(e => e.k === "taken").length;
-    $("#stToday").textContent = todayDue ? Math.min(takenToday, todayDue) + "/" + todayDue : "—";
-    $("#stTodayN").textContent = todayDue ? "doses scheduled today" : "no schedule";
+    const today = hist[hist.length - 1] || { due: 0, taken: 0, missed: 0 };
+    $("#stToday").textContent = today.due ? today.taken + "/" + today.due : "—";
+    $("#stTodayN").textContent = today.due ? "taken of the doses due" : "none due yet";
 
     const bar = $("#daysBar");
     if (bar.children.length !== hist.length) bar.innerHTML = hist.map(() => "<i><b></b></i>").join("");
@@ -308,6 +272,10 @@
 
   /* ================================================================== *
    * TUBES
+   * Each card reads out its tube and is also where that tube is refilled
+   * and rescheduled. A form is filled from the state once, when it opens,
+   * and incoming frames never touch it - so nothing is yanked out from
+   * under the carer mid-edit, and Cancel really does discard.
    * ================================================================== */
   function renderTubes(S) {
     const host = $("#tubeCards");
@@ -317,29 +285,21 @@
         '<div class="glass"><div class="ticks"></div><div class="fill"></div><div class="shine"></div></div>' +
         '<div class="body">' +
           '<div class="tn">Tube ' + (i + 1) + '</div>' +
-          '<div class="name"></div><div class="sched"></div>' +
-          '<div class="count"><b class="num">0</b><span>pills left</span></div>' +
-          '<div class="runway"></div>' +
-          '<div class="servo-no" hidden>servo did not respond</div>' +
-          '<div class="warn" hidden></div>' +
-          '<div class="acts">' +
-            '<button class="btn sm" data-act="dispense">Dispense</button>' +
-            '<button class="btn sm ghost" data-act="sweep" title="Open and close the gate without logging a dose">Test gate</button>' +
-            '<button class="btn sm ghost" data-act="refill">Refill</button>' +
+          '<div class="view">' +
+            '<div class="name"></div><div class="sched"></div>' +
+            '<div class="count"><b class="num">0</b><span>pills left</span></div>' +
+            '<div class="runway"></div>' +
+            '<div class="servo-no" hidden>servo did not respond</div>' +
+            '<div class="warn" hidden></div>' +
+            '<div class="acts">' +
+              '<button class="btn sm" data-act="refill">Refill</button>' +
+              '<button class="btn sm" data-act="edit">Edit</button>' +
+            '</div>' +
           '</div>' +
+          '<form class="form" hidden></form>' +
         '</div></article>').join("");
       $$(".glass .ticks", host).forEach(t => {
         t.innerHTML = [20, 40, 60, 80].map(p => '<i style="bottom:' + p + '%"></i>').join("");
-      });
-      host.addEventListener("click", async e => {
-        const btn = e.target.closest("button[data-act]"); if (!btn) return;
-        const i = +btn.closest(".tube").dataset.i;
-        if (btn.dataset.act === "dispense") await send({ c: "dispense", i }, "dispense");
-        if (btn.dataset.act === "sweep")    await send({ c: "sweep", i }, "test the gate");
-        if (btn.dataset.act === "refill") {
-          refillFor = i; $("#refillBox").dataset.tube = ""; renderRefill(App.S);
-          $("#alerts").scrollIntoView({ behavior: "smooth", block: "center" });
-        }
       });
     }
 
@@ -348,24 +308,21 @@
 
     [0, 1, 2].forEach(i => {
       const el = host.children[i];
-      const t = S.tubes[i] || { label: "", times: [], count: 0, dose: 1 };
-      const count = +t.count || 0;
-      const perDay = (t.times || []).length * (t.dose || 1);
-      const low = count > 0 && count <= lowAt, empty = count === 0;
+      const t = S.tubes[i] || { label: "", every: 0, count: 0, dose: 1 };
+      const count = +t.count || 0, left = stockMins(t);
+      // No frame from the box yet means no count, not an empty tube.
+      const low = count > 0 && count <= lowAt, empty = !!S.tubes[i] && count === 0;
 
       el.classList.toggle("low", low); el.classList.toggle("empty", empty);
       $(".name", el).textContent = t.label || "Tube " + (i + 1);
-      $(".sched", el).textContent = (t.times || []).length
-        ? (t.times || []).join(" · ") + "  ·  " + (t.dose || 1) +
-          " pill" + ((t.dose || 1) > 1 ? "s" : "") + " a dose"
-        : "no dose times set";
+      $(".sched", el).textContent = fmtEvery(t.every) + (t.every
+        ? " · " + (t.dose || 1) + " pill" + ((t.dose || 1) > 1 ? "s" : "") +
+          (t.in != null ? " · next in " + humanGap(t.in) : "")
+        : "");
       $(".count b", el).textContent = count;
       $(".fill", el).style.height = clamp(count / CAPACITY * 100, 0, 100) + "%";
-
-      const days = perDay ? Math.floor(count / perDay) : null;
-      $(".runway", el).textContent = !perDay ? "not scheduled"
-        : days >= 1 ? days + " day" + (days === 1 ? "" : "s") + " of doses left"
-        : "less than a day left";
+      $(".runway", el).textContent = left == null ? "no interval set"
+        : "about " + fmtSpan(left) + " of doses left";
 
       const warn = $(".warn", el);
       warn.hidden = !(low || empty);
@@ -374,118 +331,120 @@
         ? "⚠  Empty — refill before the next dose"
         : "⚠  Running low — " + count + " left, at or below " + lowAt;
 
-      // With three servos, one dead gate must not make the others look
-      // broken — and a green light is not proof a servo is even wired.
-      const gateOk = !servos || servos[i] !== false;
+      // With three servos, one dead gate must not make the others look broken.
       $(".servo-no", el).hidden = !(S.connected && servos && servos[i] === false);
-      $("button[data-act=dispense]", el).disabled = !S.connected || empty || S.mode === "dispensing";
-      $("button[data-act=sweep]", el).disabled = !S.connected || S.mode === "dispensing" || !gateOk;
+      $("button[data-act=refill]", el).classList.toggle("primary", low || empty);
     });
   }
 
-  /* ================================================================== *
-   * SCHEDULE EDITOR
-   * Rebuilt only when the values change AND nothing inside is focused, so
-   * an incoming state frame never yanks a field out from under the carer.
-   * ================================================================== */
-  function renderEditors(S) {
-    const host = $("#editors");
-    const hash = JSON.stringify(S.tubes.map(t => [t.label, t.dose, t.times, t.count]));
-    if (hash === edHash || host.contains(document.activeElement)) return;
-    edHash = hash;
-
-    host.innerHTML = S.tubes.map((t, i) =>
-      '<div class="ed" data-i="' + i + '" style="--tc:' + TUBE_COLOURS[i] + '">' +
-      '<div class="row1"><span class="dot"></span>' +
-        '<div class="f-name"><label class="fl">Tube ' + (i + 1) + ' — medicine</label>' +
-          '<input type="text" data-f="label" value="' + escAttr(t.label || "") + '" placeholder="Medicine name"></div>' +
-        '<div class="f-dose"><label class="fl">Pills / dose</label>' +
-          '<input type="number" data-f="dose" min="1" max="9" value="' + (t.dose || 1) + '"></div>' +
-        '<div class="f-count"><label class="fl">Pills left</label>' +
-          '<input type="number" data-f="count" min="0" max="999" value="' + (+t.count || 0) + '"></div>' +
-      '</div>' +
-      '<div class="times">' +
-        (t.times || []).map(x =>
-          '<span class="time-chip">' + escAttr(x) +
-          '<button data-rm="' + escAttr(x) + '" title="Remove ' + escAttr(x) + '">×</button></span>').join("") +
-        '<input type="time" data-f="add" step="60" aria-label="Add a dose time for tube ' + (i + 1) + '">' +
-        '<button class="btn sm" data-add>Add time</button>' +
-      '</div>' +
-      '<div class="save"><button class="btn sm primary" data-save>Save to device</button>' +
-      '<span class="saved">Saved</span></div></div>').join("");
+  function openForm(i, kind) {
+    const card = $("#tubeCards").children[i], form = $(".form", card), id = "t" + i;
+    const t = (App.S && App.S.tubes[i]) || {};
+    form.dataset.kind = kind;
+    form.innerHTML = (kind === "refill"
+      ? '<div><label class="fl" for="' + id + 'n">Pills in the tube now</label>' +
+        '<div class="refill-row">' +
+          '<input type="number" id="' + id + 'n" name="n" min="0" max="999" required value="' + (+t.count || 0) + '">' +
+          '<button type="button" class="btn sm ghost" data-add="10">+10</button>' +
+          '<button type="button" class="btn sm ghost" data-add="30">+30</button>' +
+          '<button type="button" class="btn sm ghost" data-set="' + CAPACITY + '">Full</button></div></div>'
+      : '<div><label class="fl" for="' + id + 'l">Medicine</label>' +
+          '<input type="text" id="' + id + 'l" name="label" maxlength="24" required value="' + escAttr(t.label || "") + '"></div>' +
+        '<div class="pair">' +
+          '<div><label class="fl" for="' + id + 'e">Every (minutes)</label>' +
+            '<input type="number" id="' + id + 'e" name="every" min="0" max="1440" required value="' + (+t.every || 0) + '"></div>' +
+          '<div><label class="fl" for="' + id + 'd">Pills</label>' +
+            '<input type="number" id="' + id + 'd" name="dose" min="1" max="9" required value="' + (+t.dose || 1) + '"></div></div>') +
+      '<div class="row"><button class="btn sm primary">Save</button>' +
+        '<button type="button" class="btn sm ghost" data-cancel>Cancel</button></div>';
+    $(".view", card).hidden = true;
+    form.hidden = false;
+    form.elements[0].focus();
   }
 
-  $("#editors").addEventListener("click", async e => {
-    const ed = e.target.closest(".ed"); if (!ed) return;
-    const S = App.S; if (!S) return;
-    const i = +ed.dataset.i;
-    const times = $$(".time-chip", ed).map(c => c.textContent.replace("×", "").trim());
+  function closeForm(card) {
+    const form = $(".form", card);
+    form.hidden = true; form.innerHTML = "";
+    $(".view", card).hidden = false;
+  }
 
-    if (e.target.dataset.rm != null) {
-      await send({ c: "sched", i, times: times.filter(x => x !== e.target.dataset.rm) },
-                 "update the schedule");
-      edHash = "";
+  $("#tubeCards").addEventListener("click", e => {
+    const card = e.target.closest(".tube"); if (!card) return;
+    const i = +card.dataset.i, form = $(".form", card);
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act) return openForm(i, act);                       // refill | edit
+    if (e.target.closest("[data-cancel]")) return closeForm(card);
+    const add = e.target.closest("[data-add]"), set = e.target.closest("[data-set]");
+    if (add) form.elements.n.value = clamp((+form.elements.n.value || 0) + +add.dataset.add, 0, 999);
+    if (set) form.elements.n.value = set.dataset.set;
+  });
+
+  $("#tubeCards").addEventListener("submit", async e => {
+    e.preventDefault();
+    const form = e.target, card = form.closest(".tube"), i = +card.dataset.i, f = form.elements;
+    if (form.dataset.kind === "refill") {
+      const n = clamp(+f.n.value || 0, 0, 999);
+      if ((await send({ c: "pills", i, n }, "save the pill count")).ok === false) return;
+      toast("good", "＋", "Count saved", tubeName(App.S, i) + " now has " + n + " pills.");
+    } else {
+      const label = f.label.value.trim() || "Medicine", dose = clamp(+f.dose.value || 1, 1, 9);
+      const every = clamp(+f.every.value || 0, 0, 1440);
+      if ((await send({ c: "sched", i, label, dose, every }, "save the schedule")).ok === false) return;
+      toast("good", "🕑", "Schedule saved", label + " · " + fmtEvery(every));
     }
-    if (e.target.closest("[data-add]")) {
-      const v = $("input[data-f=add]", ed).value;
-      if (!v) return toast("warn", "🕑", "Pick a time first", "Use the time field beside the button.");
-      if (times.includes(v)) return toast("warn", "🕑", "Already scheduled", v + " is already on this tube.");
-      await send({ c: "sched", i, times: [...times, v].sort() }, "add the time");
-      edHash = "";
-    }
-    if (e.target.closest("[data-save]")) {
-      const label = $("input[data-f=label]", ed).value.trim() || "Medicine";
-      const dose  = clamp(+$("input[data-f=dose]", ed).value || 1, 1, 9);
-      const count = clamp(+$("input[data-f=count]", ed).value || 0, 0, 999);
-      await send({ c: "sched", i, label, dose, times }, "save the schedule");
-      if (count !== (S.tubes[i] || {}).count) await send({ c: "pills", i, n: count }, "set the count");
-      const tag = $(".saved", ed);
-      tag.classList.add("on"); setTimeout(() => tag.classList.remove("on"), 1600);
-      edHash = "";
-    }
+    closeForm(card);
   });
 
   /* ================================================================== *
-   * WHAT THE BOX ITSELF SHOWS
+   * PRESENCE
+   *
+   * A due pill only drops once somebody is at the box. Both sensors watch
+   * at once, with nothing to choose:
+   *
+   *   ultrasonic   the HC-SR04 on the dispenser, trusted first - two close
+   *                readings in a row and the board drops the pill itself
+   *   camera       the SenseCraft model on the XIAO, the backup - the bridge
+   *                drops the pill on any frame 70% sure of a person
+   *
+   * Whichever sees them first wins. This panel shows both side by side.
    * ================================================================== */
-  function renderBox(S) {
-    const idx = S.active != null ? S.active : (S.next ? S.next.tube : null);
-    const t = idx != null ? S.tubes[idx] : null;
-    // Live mode shows the lines the hardware actually wrote; demo mode
-    // renders them here with the identical logic.
-    const lines = (S.lcd && S.lcd[0] != null) ? S.lcd : lcdRender({
-      clock_set: S.clock_set, mode: S.mode, tube: idx,
-      label: t ? t.label : "", dose: t ? t.dose : 1,
-      next_hhmm: S.next && S.next.at, next_in: S.next && S.next.in,
-    });
-    paintLcd($("#lcd"), lines);
+  function presence(S) {
+    const so = S.sonar || {}, v = S.vision || {};
+    const cm = so.cm == null ? null : +so.cm;
+    const sonar = !!S.connected && (!!so.present || cm != null);
+    // A camera that stopped talking is not an empty room.
+    const camera = v.age != null && v.age <= 10;
+    return { sonar, camera, cm, v, near: (sonar && !!so.near) || (camera && !!v.near) };
+  }
 
-    const p = (S.hw && S.hw.present) || {}, d = (S.hw && S.hw.detail) || {};
-    const servos = (S.hw && S.hw.servos) || [], pins = (S.hw && S.hw.pins) || [];
-    const rows = servos.length
-      ? servos.map((ok, i) => [ok, "Tube " + (i + 1) + " gate servo",
-          (pins[i] != null ? "GPIO" + pins[i] : "—") + (ok ? " · PWM ready" : "")])
-      : [[!!p.servo, "Gate servos", d.servo || "GPIO21 / 38 / 39"]];
-    rows.push([!!p.lcd,   "1602 display",        d.lcd   || "I²C 0x27"]);
-    rows.push([!!p.audio, "Speaker / amplifier", d.audio || "I2S 2/41/48"]);
+  function renderPresence(S) {
+    const p = presence(S), nearCm = (S.cfg && S.cfg.near_cm) || 80;
+    $("#presChip").className = "chip" + (p.near ? " live" : p.sonar || p.camera ? "" : " demo");
+    $("#presSrc").textContent = p.sonar && p.camera ? "Ultrasonic + camera"
+      : p.sonar ? "Ultrasonic" : p.camera ? "Camera" : "No sensor";
+    $("#pres").classList.toggle("near", p.near);
+    $("#presIc").textContent = p.near ? "◉" : "◌";
+    // While a dose waits, "nobody" is a state that should end - say so.
+    $("#presWhat").textContent = !p.sonar && !p.camera ? "Not sensing"
+      : p.near ? "Somebody at the box" : S.mode === "due" ? "Nobody at the box yet" : "Nobody at the box";
+    $("#presWhen").textContent =
+      (!S.connected ? "the dispenser is not connected"
+        : "ultrasonic " + (p.cm != null ? Math.round(p.cm) + " cm" : p.sonar ? "no echo" : "not reading")) +
+      " · camera " + (p.camera ? "sees " + p.v.seen : (p.v.note || "not reading"));
+    $("#presVal").textContent = p.cm != null ? Math.round(p.cm)
+      : p.camera && p.v.score != null ? Math.round(p.v.score) : "—";
+    $("#presVal").nextElementSibling.textContent = p.cm != null ? "cm away"
+      : p.camera ? "% person" : " ";
 
-    // Presence, when the ultrasonic sensor is fitted. Shows the live reading
-    // rather than just a dot, because "42cm" tells you it is working and
-    // "somebody is at the box" tells you something about the patient.
-    const sonar = S.sonar || {};
-    if (sonar.present || p.sonar) {
-      rows.push([true, sonar.near ? "Somebody at the box" : "Nobody at the box",
-                 (sonar.cm != null ? sonar.cm + " cm" : "no echo") +
-                 " · " + (d.sonar || "TRIG1 ECHO40")]);
+    // The bar is a distance scale, so only the ultrasonic gets one.
+    const show = p.cm != null;
+    $("#presBarWrap").hidden = $("#presScale").hidden = !show;
+    if (show) {
+      $("#presBar").style.width = clamp(p.cm / 4, 2, 100) + "%";
+      $("#presBar").style.background = p.near
+        ? "var(--mint)" : "linear-gradient(90deg,var(--mint),var(--blue))";
+      $("#presMark").style.left = clamp(nearCm / 4, 0, 100) + "%";
     }
-
-    $("#hwList").innerHTML = rows.map(([on, name, pin]) => {
-      const cls = !S.connected ? "" : on ? "ok" : "no";
-      const shown = !S.connected ? "no device" : on ? pin : (String(pin).slice(0, 40) || "not detected");
-      return '<div class="p ' + cls + '"><span class="dot"></span><span class="nm">' +
-             escAttr(name) + '</span><span class="pin" title="' + escAttr(shown) + '">' +
-             escAttr(shown) + '</span></div>';
-    }).join("");
   }
 
   /* ================================================================== *
@@ -563,29 +522,29 @@
   function renderCfg(S) {
     const c = S.cfg || {};
     const hash = JSON.stringify([c.patient, c.low_at, c.remind_every, c.missed_after]);
-    const host = $("#settings");
     if (hash === cfgHash) return;
     // A state frame lands twice a second; rewriting a field the carer is
     // halfway through typing into would be maddening.
-    if (host.contains(document.activeElement)) return;
+    if ($("#cfgForm").contains(document.activeElement)) return;
     cfgHash = hash;
     $("#cfgPatient").value = c.patient && c.patient !== "Patient" ? c.patient : "";
     $("#cfgLow").value     = c.low_at ?? 10;
-    $("#cfgRemind").value  = Math.round((c.remind_every ?? 180) / 60);
-    $("#cfgMissed").value  = Math.round((c.missed_after ?? 900) / 60);
+    $("#cfgRemind").value  = c.remind_every ?? 30;
+    $("#cfgMissed").value  = c.missed_after ?? 120;
   }
 
-  $("#btnSaveCfg").onclick = async () => {
+  $("#cfgForm").addEventListener("submit", async e => {
+    e.preventDefault();
     const patient = $("#cfgPatient").value.trim() || "Patient";
     const low_at  = clamp(+$("#cfgLow").value || 10, 1, 200);
-    const remind  = clamp(+$("#cfgRemind").value || 3, 1, 60) * 60;
-    const missed  = clamp(+$("#cfgMissed").value || 15, 2, 240) * 60;
-    await send({ c: "cfg", patient, low_at, remind_every: remind, missed_after: missed },
-               "save the settings");
+    // Seconds, not minutes: with doses every 5 minutes, waits are short.
+    const remind  = clamp(+$("#cfgRemind").value || 30, 5, 3600);
+    const missed  = clamp(+$("#cfgMissed").value || 120, 30, 14400);
+    const res = await send({ c: "cfg", patient, low_at, remind_every: remind, missed_after: missed },
+                           "save the settings");
     cfgHash = "";
-    const tag = $("#cfgSaved");
-    tag.style.opacity = "1"; setTimeout(() => tag.style.opacity = "0", 1600);
-  };
+    if (res.ok !== false) toast("good", "✓", "Care settings saved", "Stored on the box.");
+  });
 
   /* ================================================================== *
    * ACTIVITY + CONSOLE
@@ -599,12 +558,12 @@
   };
 
   function eventNote(ev) {
+    const w = ev.waited || 0;
     switch (ev.k) {
-      case "dispensed": return (ev.why || "") + (ev.left != null ? " · " + ev.left + " left" : "") +
+      case "dispensed":
+      case "taken":     return (ev.why || "") + (ev.left != null ? " · " + ev.left + " left" : "") +
                                (ev.servo === false ? " · servo did not respond" : "");
-      case "taken":     return ev.why === "kiosk" ? "acknowledged on the patient screen"
-                             : ev.why === "carer" ? "marked by the carer" : (ev.why || "");
-      case "missed":    return "not taken after " + Math.round((ev.waited || 0) / 60) + " min";
+      case "missed":    return "nobody came to the box in " + (w >= 120 ? Math.round(w / 60) + " min" : w + " s");
       case "empty":     return "a dose was due but the tube was empty";
       case "low":       return (ev.left ?? "?") + " pills left";
       case "refill":    return "count set to " + (ev.to ?? "?");
@@ -620,36 +579,15 @@
 
   function renderLog(S) {
     const list = (S.events || []).slice().reverse();
-    const host = $("#logList");
-    if (!list.length) {
-      host.innerHTML = '<li><div class="empty-note">Nothing yet. Events appear here as doses go out.</div></li>';
-      return;
-    }
-    host.innerHTML = list.map(ev => {
-      const [icon, title] = EV[ev.k] || ["·", ev.k];
-      const who = ev.label || (ev.i != null ? "Tube " + (ev.i + 1) : "");
-      return '<li class="k-' + escAttr(ev.k) + '"><span class="ic">' + icon + '</span>' +
-        '<span class="tx"><b>' + escAttr(title) + '</b>' + (who ? " — " + escAttr(who) : "") +
-        '<div>' + escAttr(eventNote(ev)) + '</div></span>' +
-        '<span class="when">' + escAttr(fmtWhen(ev.at)) + '</span></li>';
-    }).join("");
-  }
-
-  function renderTerm(S) {
-    const host = $("#term");
-    if (!S.console || !S.console.length) {
-      host.textContent = App.source === "demo"
-        ? "demo mode — no serial port in use\nswitch to Live device once bridge.py is running"
-        : "waiting for the bridge...";
-      return;
-    }
-    const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 40;
-    host.innerHTML = S.console.map(l => {
-      const cls = l.line.startsWith("device:") ? "dev" : l.line.startsWith("bridge:") ? "br" : "";
-      return '<span class="t">' + escAttr(l.t) + '</span> <span class="' + cls + '">' +
-             escAttr(l.line) + '</span>';
-    }).join("\n");
-    if (atBottom) host.scrollTop = host.scrollHeight;
+    setHtml($("#logList"), !list.length ? '<li><div class="empty-note">No events</div></li>'
+      : list.map(ev => {
+        const [icon, title] = EV[ev.k] || ["·", ev.k];
+        const who = ev.label || (ev.i != null ? "Tube " + (ev.i + 1) : "");
+        return '<li class="k-' + escAttr(ev.k) + '"><span class="ic">' + icon + '</span>' +
+          '<span class="tx"><b>' + escAttr(title) + '</b>' + (who ? " — " + escAttr(who) : "") +
+          '<div>' + escAttr(eventNote(ev)) + '</div></span>' +
+          '<span class="when">' + escAttr(fmtWhen(ev.at)) + '</span></li>';
+      }).join(""));
   }
 
   /* ================================================================== *
@@ -663,11 +601,16 @@
     if (!/^https?:\/\//i.test(v)) v = "http://" + v;
     return v.replace(/\/$/, "");
   }
+  // The SenseCraft camera's frames, relayed by the bridge over USB - the
+  // same pictures the person detection runs on, so one XIAO does both.
+  const usbCam = () => App.source !== "demo" && App.S && App.S.vision &&
+                       App.S.vision.frame_age != null && App.S.vision.frame_age < 10;
+
   function camStart() {
-    const base = camBase();
-    if (!base) return toast("warn", "◉", "Camera address needed",
-      "Read the IP from the XIAO serial log and paste it in.");
-    store.set("camIp", $("#camIp").value.trim());
+    const usb = usbCam(), base = usb ? Bridge.url("/api/camera/stream") : camBase();
+    if (!base) return toast("warn", "◉", "No camera yet",
+      "Plug the SenseCraft XIAO into the laptop running the bridge, or put a WiFi camera's address in.");
+    if (!usb) store.set("camIp", $("#camIp").value.trim());
 
     // Sound the box, not this laptop. The point is that the person being
     // looked at hears the camera come on - a light they might not be facing
@@ -682,21 +625,21 @@
     img.onerror = () => {
       camStop(true);
       toast("bad", "◉", "No stream at " + base,
-        "Check the address, that the sketch is running, and that Start Stream was pressed on the camera page.");
+        "Check the camera is plugged in and running, and that nothing else is watching it.");
     };
     // The CameraWebServer sketch puts MJPEG on port 81; ?t= defeats caching.
-    img.src = base.replace(/:\d+$/, "") + ":81/stream?t=" + Date.now();
+    img.src = usb ? base + "?t=" + Date.now()
+                  : base.replace(/:\d+$/, "") + ":81/stream?t=" + Date.now();
     camOn = true;
     $("#btnCam").textContent = "Stop check-in";
     $("#camStat").className = "p ok";
-    $("#camStat .pin").textContent = "streaming";
+    $("#camStat .pin").textContent = usb ? "streaming · USB, 240×240, model paused" : "streaming · WiFi";
   }
   function camStop(quiet) {
     const img = $("#camImg");
     if (img) { img.onerror = null; img.src = ""; }
     $("#camFrame").innerHTML = '<div class="cam-off"><div class="eye">◉</div>' +
-      '<h3>Camera is off</h3><p>The stream stays off until a carer asks for it. Enter the ' +
-      'camera address and press <b>Start check-in</b>.</p></div>';
+      '<h3>Camera is off</h3></div>';
     camOn = false;
     $("#btnCam").textContent = "Start check-in";
     $("#camStat").className = "p";
@@ -713,7 +656,12 @@
 
   function renderCameraFinder(S) {
     const c = S.camera;
-    const btn = $("#btnFindCam"), msg = $("#findCamMsg");
+    const btn = $("#btnFindCam"), msg = $("#findCamMsg"), v = S.vision || {};
+    // Which feed Start check-in will use: the USB one wins when it is live.
+    $("#camFeed").textContent = usbCam() ? "USB · SenseCraft on " + v.port : "WiFi · the address above";
+    // The address, the finder and the webcam's own settings page are all
+    // WiFi-sketch things - noise while the USB feed is the one in use.
+    $("#camWifi").hidden = $("#btnCamUi").hidden = usbCam();
 
     if (App.source === "demo") {
       btn.disabled = true;
@@ -760,24 +708,11 @@
       chip.className = "chip bad"; $("#srcTxt").textContent = "No device";
     }
 
-    const dot = $("#connDot"), title = $("#connTitle"), msg = $("#connMsg");
-    if (App.source === "demo") {
-      dot.style.background = "var(--amber)";
-      title.textContent = "Demo data — no board attached";
-      msg.className = "msg";
-      msg.innerHTML = 'Everything works without hardware. Switch to <b>Live device</b> once ' +
-                      '<span class="mono">python site/bridge.py</span> is running.';
-    } else if (S.connected) {
-      dot.style.background = "var(--mint)";
-      title.textContent = "Live on " + (S.port || "serial");
-      msg.className = "msg good";
-      msg.textContent = "Connected. Commands reach the board in about 30 ms.";
-    } else {
-      dot.style.background = "var(--red)";
-      title.textContent = "Not connected";
-      msg.className = "msg bad";
-      msg.textContent = S.error || "Waiting for the bridge. Start it with: python site/bridge.py";
-    }
+    const msg = $("#connMsg");
+    msg.className = "msg" + (App.source === "demo" ? "" : S.connected ? " good" : " bad");
+    msg.textContent = App.source === "demo" ? "A simulated box - nothing is plugged in."
+      : S.connected ? "Connected. Commands reach the board in about 30 ms."
+      : S.error || "Waiting for bridge";
     $("#kvFw").textContent = S.fw || "—";
     $("#kvAge").textContent = S.frame_age != null ? S.frame_age + "s"
                             : (App.source === "demo" ? "live sim" : "—");
@@ -799,10 +734,10 @@
   function paint(S) {
     if (!S) return;
     if (view === "dashboard") {
-      renderAlerts(S); renderRefill(S); renderHero(S); renderStats(S);
-      renderTubes(S); renderEditors(S); renderBox(S); renderLog(S);
+      renderAlerts(S); renderHero(S); renderPresence(S); renderTubes(S);
+      renderStats(S); renderLog(S);
     } else if (view === "settings") {
-      renderSound(S); renderCfg(S); renderTerm(S);
+      renderSound(S); renderCfg(S);
     } else if (view === "camera") {
       renderCameraFinder(S);
     }
@@ -828,12 +763,6 @@
   function boot() {
     $$("nav.views button").forEach(b => b.onclick = () => setView(b.dataset.view));
 
-    $("#btnForce").onclick = () => {
-      const S = App.S;
-      if (S && S.mode === "due") send({ c: "taken", i: S.active, why: "carer" }, "log the dose");
-      else send({ c: "force" }, "dispense");
-    };
-    $("#btnProbe").onclick = () => send({ c: "probe" }, "re-probe the pins");
 
     $("#btnCam").onclick = () => camOn ? camStop() : camStart();
     $("#btnFindCam").onclick = async () => {
@@ -862,23 +791,18 @@
     };
 
     const paintAlertChip = () => {
-      $("#alarmChip").className = "chip" + (Notify.on ? " live" : "");
-      $("#alarmTxt").textContent = Notify.on ? "Alerts on" : "Alerts off";
+      $("#alarmChip").setAttribute("aria-pressed", String(Notify.on));
+      $("#alarmChip").textContent = Notify.on ? "Desktop alerts on" : "Desktop alerts off";
     };
     paintAlertChip();
     $("#alarmChip").onclick = async () => { await Notify.toggle(); paintAlertChip(); };
 
-    $("#connHd").onclick = () => {
-      const open = $("#conn").classList.toggle("open");
-      $("#connHd").setAttribute("aria-expanded", String(open));
-      $("#connChev").textContent = open ? "▼" : "▲";
-    };
     $$("#conn .seg button").forEach(b => b.onclick = () => {
       markSourceTouched();
       $$("#conn .seg button").forEach(x => x.setAttribute("aria-current", String(x === b)));
       $("#bridgeCfg").hidden = b.dataset.src !== "bridge";
       setSource(b.dataset.src);
-      soundHash = ""; edHash = "";
+      soundHash = "";
     });
     $("#baseUrl").value = App.base;
     $("#baseUrl").onchange = e => setBase(e.target.value);
@@ -894,12 +818,20 @@
       if (e.key === "1") setView("dashboard");
       if (e.key === "2") setView("camera");
       if (e.key === "3") setView("settings");
-      if (e.key.toLowerCase() === "f") $("#btnForce").click();
     });
 
+    // Written cell by cell rather than as one string, so the blinking
+    // colons keep their animation instead of restarting on every tick.
+    const clock = $("#hostClock");
+    clock.innerHTML = "<span></span><i>:</i><span></span><i>:</i><span></span>";
+    const digits = $$("span", clock);
     setInterval(() => {
-      $("#hostClock").textContent = new Date().toLocaleTimeString([], { hour12: false });
-    }, 500);
+      const d = new Date();
+      [d.getHours(), d.getMinutes(), d.getSeconds()].forEach((v, i) => {
+        const t = String(v).padStart(2, "0");
+        if (digits[i].textContent !== t) digits[i].textContent = t;
+      });
+    }, 250);
 
     start({ role: "carer", paint });
 

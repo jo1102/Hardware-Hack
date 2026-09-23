@@ -84,18 +84,17 @@ def render(view):
     if mode == "empty":
         return fit("TUBE %d EMPTY" % ((tube or 0) + 1)), fit("CARER ALERTED")
 
-    # 4. A dose is out and waiting to be taken. This overrides everything -
+    # 4. A dose is due and the box is waiting for somebody to come to it -
+    #    the pill only drops once they are there. This overrides everything:
     #    it is the one moment the screen has a job to do.
     if mode == "due":
-        line0 = "TAKE NOW  TUBE%d" % ((tube or 0) + 1)
         dose = int(view.get("dose", 1))
         label = short(view.get("label", "Medicine"), 11)
-        line1 = "%-11s x%d" % (label, dose)
-        return fit(line0), fit(line1)
+        return fit("COME TO THE BOX"), fit("%-11s x%d" % (label, dose))
 
-    # 5. Acknowledged. Held for a few seconds so there is visible feedback.
+    # 5. The pill has just dropped. Held for a few seconds.
     if mode == "taken":
-        return fit("THANK YOU"), fit("DOSE LOGGED")
+        return fit("TAKE YOUR PILL"), fit("FROM THE TRAY")
 
     # 6. Idle: the countdown, and nothing else.
     hhmm = view.get("next_hhmm")

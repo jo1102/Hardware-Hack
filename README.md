@@ -7,6 +7,12 @@ Somebody who needs prompting three times a day does not need a 24/7 carer.
 They need something in the kitchen that opens a gate at the right moment,
 plays a tune, and tells one relative when the pills are running out.
 
+**How a dose goes.** Each tube runs on its own interval. When it comes round
+the box plays its chime and waits; the gate only opens once somebody is
+standing at the box - the ultrasonic sensor, or the camera as a backup - so a
+pill never sits in the tray of an empty room. Nobody within two minutes and
+the dose is logged as missed, with the pill still in the tube.
+
 | | Who it is for | What it is |
 |---|---|---|
 | **Carer console** | a relative, on a laptop or phone | refill alerts, schedule editing, pill counts, adherence, camera check-in, reminder sound |
@@ -83,6 +89,7 @@ python site/bridge.py
 |---|---|
 | Carer console | <http://localhost:9000> |
 | Patient kiosk | <http://localhost:9000/patient> |
+| Testing (dispense, test gates, LCD, console) | <http://localhost:9000/test> |
 
 It binds `0.0.0.0` and prints a LAN address too, so a phone or a tablet on the
 same network can open either page.
@@ -96,7 +103,11 @@ Three things worth knowing:
 - The bridge re-detects, re-opens and re-syncs the clock on its own, so
   nothing needs unplugging or resetting between commands.
 
-### 5. The camera, optional
+### 5. The camera sketch
+
+`camera/XiaoCam` is the XIAO's firmware: an 800x600 WiFi stream for Check-in,
+about 13 fps. It replaces SenseCraft on the board, whose picture is fixed at
+240x240 and about 2 fps. Person detection runs on the laptop (step 6).
 
 `arduino-cli` is not in the repository (it is 53MB of binary). Download it
 into `tools/` when you need it:
@@ -113,6 +124,52 @@ tools/arduino-cli.exe compile --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" camera
 
 `PSRAM=opi` is **not optional** - see the camera section below.
 
+### 6. Presence and the camera
+
+A due pill only drops once somebody is at the box. Two sensors watch at once -
+there is nothing to choose - and the **At the box** panel beside the countdown
+shows both:
+
+- **Ultrasonic, trusted first.** An HC-SR04 on the dispenser, TRIG 11 /
+  ECHO 12. Two readings in a row closer than 80 cm and the gate opens.
+- **Camera, the backup.** The bridge runs YOLOX, a person detector, on the
+  XIAO's frames about once a second. Any frame at least 60% sure of a person
+  and the gate opens - so a patient the ultrasonic misses still gets their
+  pill. (A model small enough to run on the XIAO itself was tried and scored
+  an empty room as high as a person in it.)
+
+The same XIAO is the carer's **Check-in** camera, 800x600 over WiFi. It tells
+the bridge its WiFi address over USB, so Check-in fills the address in by
+itself and the terminal prints `camera: WiFi stream at http://...`.
+
+To set the camera up, once: flash `camera/XiaoCam` (step 5), install OpenCV
+and fetch the detector (36MB, Apache-2.0, from OpenCV's model zoo), then
+leave the XIAO plugged into the laptop that runs `site/bridge.py`:
+
+```bash
+python -m pip install -r requirements.txt
+curl -fL --create-dirs -o site/models/object_detection_yolox_2022nov.onnx https://huggingface.co/opencv/object_detection_yolox/resolve/main/object_detection_yolox_2022nov.onnx
+```
+
+Without either, the ultrasonic decides alone and Check-in still streams.
+
+SenseCraft still works instead - load **Person Classification** on the XIAO
+from SenseCraft's page (then close the page, it holds the USB port) and the
+bridge reads it the same way, with Check-in relayed over USB at 240x240.
+
+The panel says in plain words what the camera is doing - "COM6 is in use",
+`a person, 91% sure`, or `nobody (12%)` once it is reading.
+
+Dispense, Test gate, the LCD mirror and the device console are on the testing
+page, <http://localhost:9000/test>, not the carer console.
+
+Check both halves without any hardware attached:
+
+```bash
+python sensecraft/presence_relay.py --selftest
+python dispenser/selfcheck.py
+```
+
 ---
 
 ## What is in here
@@ -120,7 +177,7 @@ tools/arduino-cli.exe compile --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" camera
 | Folder | What is in it |
 |---|---|
 | `site/` | The two web screens and the USB serial bridge. **Start here:** [`site/README.md`](site/README.md) |
-| `dispenser/` | Kairo firmware: scheduler, gate servos, 16x2 screen layouts, deploy script |
+| `dispenser/` | Kairo firmware: scheduler, gate servos, 16x2 screen layouts, deploy script, a PC self-check |
 | `lcd/` | I2C 1602 LCD driver and tests |
 | `audio/` | I2S amplifier, PWM speaker, audio conversion, the chime WAVs |
 | `servo/` | The servo driver, plus sweep and positioning tests |
@@ -128,6 +185,7 @@ tools/arduino-cli.exe compile --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" camera
 | `serial-tools/` | Reading boot logs and serial output |
 | `diagnostics/` | Hardware probes for when something is not responding |
 | `firmware/` | MicroPython image, for restoring a board that was flashed with Arduino |
+| `sensecraft/` | Reading the SenseCraft camera: person detection and check-in frames for the bridge |
 | `tools/` | Where `arduino-cli` goes (not committed) |
 
 [`site/README.md`](site/README.md) has the serial protocol, the design
@@ -216,12 +274,17 @@ this rail.
 ### Two things that keep the peak down, by design
 
 **Only one servo ever moves at a time.** `dispense()` takes a single tube
-index; there is no code path that drives two.
+index; there is no code path that drives two. That was not true on the wire
+while the servos were released with `PWM.deinit()`: it frees the LEDC channel
+but leaves the pin wired to it, MicroPython hands the freed channel to the
+next servo on any pin, and every released pin copied its pulses - one dose
+swung all three gates. Now each servo keeps its own channel for good and
+goes slack on a zero duty instead. `python dispenser/selfcheck.py` reproduces
+the old behaviour on a fake board and checks each tube drives only its pin.
 
-**The servo and the chime never overlap.** In `do_dispense()` the servo travel
-finishes, then state is published, and only then does `chime()` play. That
-ordering is deliberate - it means the peak is one servo *or* the amplifier,
-never both.
+**The servo and the chime never overlap.** The chime plays when a dose comes
+due and blocks until it ends; the servo only moves later, once somebody is at
+the box. So the peak is one servo *or* the amplifier, never both.
 
 ### What to power it from
 

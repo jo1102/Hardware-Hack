@@ -4,14 +4,16 @@
     python site/bridge.py --port COM4        # if you already know the port
     python site/bridge.py --no-serial        # UI only, no hardware attached
 
-It does two jobs:
+It does three jobs:
 
   1. holds ONE persistent USB serial connection to the dispenser and keeps
      it alive - re-detecting the port, re-opening it and re-syncing the clock
      on its own, so nothing has to be unplugged or reset between commands;
   2. serves site/index.html and a small JSON API over HTTP, with CORS wide
      open so the page also works when opened straight off disk or from a
-     phone on the same network.
+     phone on the same network;
+  3. reads the SenseCraft camera on the XIAO over its own USB cable: it
+     backs up the ultrasonic sensor and feeds the Check-in page.
 
 WHY SERIAL AND NOT WIFI
 Venue networks routinely put clients on isolated subnets, so a browser often
@@ -27,6 +29,8 @@ HTTP API
     POST /api/port          {"port":"COM4"} - switch without restarting
     GET  /api/camera        where the XIAO camera was last seen
     POST /api/camera/find   sweep the local subnet looking for it
+    GET  /api/camera/stream the SenseCraft camera's frames, live, as MJPEG
+    GET  /test              the hardware testing page
 
 Pass --log FILE to append everything the board says to a file as well as the
 in-memory console, which only holds the last 250 lines and dies with the
@@ -42,10 +46,12 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
+import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -63,6 +69,8 @@ RESYNC_SECONDS = 900        # push the time back down every 15 minutes
 HELLO_TIMEOUT = 4.0         # how long to wait for the agent to announce itself
 SILENCE_LIMIT = 15          # seconds of no state frames before a restart
 ESPRESSIF_VID = 0x303A      # native USB on both ESP32-S3 boards here
+MICROPYTHON_PID = 0x4001    # the dispenser: MicroPython's own USB serial
+XIAO_PID = 0x1001           # the camera: the chip's built-in USB serial
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +223,248 @@ class CameraFinder:
             self.note = "scan failed: %s" % e
         finally:
             self.scanning = False
+            print("  camera: %s" % self.note, flush=True)
 
 
 camera = CameraFinder()
+
+
+# ---------------------------------------------------------------------------
+# The camera - backup presence sensor and check-in feed, off one USB cable
+# ---------------------------------------------------------------------------
+# The box drops a waiting dose once somebody is at it. The HC-SR04 on the
+# dispenser answers that itself; the camera backs it up and sends the box
+# {"c":"present"} on any frame sure enough of a person. With camera/XiaoCam
+# on the XIAO, the USB cable only says where its WiFi stream is and watch()
+# runs YOLOX on the frames here. With SenseCraft on it instead, its own model's
+# results come over USB, each with the JPEG it was made from for Check-in.
+# No second program to run either way.
+#
+# It starts straight away, dispenser or not - Check-in should work either
+# way - and tells the boards apart by their USB ids, so it never opens the
+# dispenser's port. If the camera goes quiet it asks again, then reconnects.
+# The SenseCraft web page cannot share the port - stop the bridge while that
+# page is open.
+
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "sensecraft"))
+import presence_relay as sensecraft  # noqa: E402  the SenseCraft parsing
+
+# Person detection for the WiFi camera (camera/XiaoCam) runs here, on the
+# laptop. Optional: without OpenCV or the model, the ultrasonic sensor
+# decides alone and Check-in still streams.
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None
+# OpenCV's model zoo, Apache-2.0: huggingface.co/opencv/object_detection_yolox.
+# The 9MB int8 copy scores every frame 0 on this OpenCV - use this one.
+YOLOX = os.path.join(HERE, "models", "object_detection_yolox_2022nov.onnx")
+SEEN = 60       # % sure of a person before a pill drops. Measured: somebody
+                # at the desk 91, empty rooms 1 and 33.
+
+
+def person_score(net, jpg):
+    """YOLOX's confidence, 0-1, that some box in this JPEG is a person.
+
+    The model zoo's own preprocessing: RGB, letterboxed into 640x640 on grey
+    114, values left as 0-255. Each of the 8400 rows is [box, objectness,
+    80 class scores]; person is COCO class 0. Presence needs no boxes.
+    """
+    bgr = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+    h, w = bgr.shape[:2]
+    r = min(640 / h, 640 / w)
+    pad = np.full((640, 640, 3), 114, np.float32)
+    pad[:int(h * r), :int(w * r)] = cv2.resize(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
+                                               (int(w * r), int(h * r)))
+    net.setInput(pad.transpose(2, 0, 1)[None])
+    rows = net.forward()[0]
+    return float((rows[:, 4] * rows[:, 5]).max())
+
+
+class Vision:
+    """What the camera last saw, its latest frame, and its state in words."""
+
+    def __init__(self):
+        self.port = None
+        self.note = "looking for the camera"
+        self.near = False
+        self.score = None       # 0-100 for the person class, or None
+        self.seen = ""          # "class 1 at 91%" - how the carer checks it
+        self.at = 0.0           # when the last result arrived
+        self.frame = None       # the latest JPEG, for the Check-in page
+        self.frame_at = 0.0
+        self._asked = 0.0       # when INVOKE was last sent
+        self._told = 0.0        # when the box was last told somebody is here
+        self.viewers = set()    # Check-in streams open right now, by thread
+        self._sent = None       # INVOKE or SAMPLE, whichever the board is running
+        self._heard = 0.0       # when the board last sent any JSON line
+
+    def snapshot(self):
+        now = time.time()
+        return {"port": self.port, "note": self.note, "near": self.near,
+                "score": self.score, "seen": self.seen,
+                "age": round(now - self.at, 1) if self.at else None,
+                "frame_age": round(now - self.frame_at, 1) if self.frame else None}
+
+    QUIET_ASK = 5       # seconds without a result before asking again
+    QUIET_DROP = 15     # ...and before closing the port and finding it anew
+
+    def run(self, device):
+        ser, buf, since = None, b"", 0.0
+        while True:
+            if ser is None:
+                ser, buf, since = self._find(device), b"", time.time()
+                if ser is None:
+                    time.sleep(3)
+                    continue
+            try:
+                buf += ser.read(ser.in_waiting or 1)
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    self._line(raw.decode("utf-8", "replace"), ser, device)
+                # While somebody watches Check-in the model is paused and the
+                # board just sends pictures (SAMPLE) - far faster than one per
+                # inference. The ultrasonic sensor still covers presence.
+                want = sensecraft.SAMPLE if self.viewers else sensecraft.INVOKE
+                if want is not self._sent:
+                    self._sent, self._asked, since = want, time.time(), time.time()
+                    ser.write(want)
+                    self.near = False
+                    self.note = ("model paused for check-in on %s" % self.port if self.viewers
+                                 else "resuming the model on %s" % self.port)
+                    device.log("camera: %s" % self.note)
+                # A camera that stops talking - rebooted, or the SenseCraft
+                # page stopped its model - gets asked again, then reconnected,
+                # instead of sitting "connected" to silence forever.
+                quiet = time.time() - max(self.at, self.frame_at, self._heard, since)
+                if quiet > self.QUIET_DROP:
+                    raise OSError("nothing for %ds" % self.QUIET_DROP)
+                if quiet > self.QUIET_ASK and time.time() - self._asked > self.QUIET_ASK:
+                    self._asked = time.time()
+                    ser.write(self._sent)
+            except Exception as e:
+                device.log("bridge: lost the camera on %s (%s), looking again" % (self.port, e))
+                self._close(ser)
+                ser = None
+                continue
+            if len(buf) > 262144:
+                buf = b""       # a line with no end is noise, not a frame
+
+    def _close(self, ser):
+        try:
+            ser.close()
+        except Exception:
+            pass
+        self.port, self.near, self.at, self.frame, self._sent = None, False, 0.0, None, None
+
+    def _find(self, device):
+        """Open the Espressif port that is not the dispenser and speaks SSCMA.
+
+        The XIAO's own USB id first; never MicroPython's (that is the
+        dispenser, and an AT command sent to it is noise it has to reject).
+        """
+        busy = []
+        ports = sorted(Device.candidates(), key=lambda info: info["pid"] != XIAO_PID)
+        for info in ports:
+            port = info["port"]
+            if port == device.port or not info["likely"] or info["pid"] == MICROPYTHON_PID:
+                continue
+            ser = serial.Serial()
+            ser.port, ser.baudrate, ser.timeout = port, sensecraft.BAUD, 0.3
+            ser.dtr = ser.rts = False   # asserted on open, these reboot the XIAO
+            try:
+                ser.open()
+            except Exception:
+                busy.append(port)
+                continue
+            try:
+                ser.write(sensecraft.INVOKE)
+                deadline = time.time() + 6      # room for a reboot anyway
+                while time.time() < deadline:
+                    # SenseCraft starts every line with "\r", so strip first.
+                    line = ser.readline().strip()
+                    if line.startswith(b"{") and b'"name"' in line:
+                        self.port, self._asked, self._sent = port, time.time(), sensecraft.INVOKE
+                        self.note = "connected on %s, waiting for a reading" % port
+                        device.log("bridge: camera on %s" % port)
+                        return ser
+            except Exception:
+                pass
+            ser.close()
+        self.note = ("%s is in use by another program - the SenseCraft page, or an older "
+                     "bridge still running" % busy[0]
+                     if busy else "no SenseCraft camera on USB - plug the XIAO into this laptop")
+        return None
+
+    def _line(self, text, ser, device):
+        now = time.time()
+        if text.lstrip().startswith("{"):
+            self._heard = now               # alive, whether or not it is a result
+        # A reboot (INIT@...) loses the request: ask again, not in a loop.
+        if '"INIT@' in text and now - self._asked > 5:
+            self._asked = now
+            ser.write(self._sent)
+        # camera/XiaoCam says where its WiFi stream is every two seconds, so
+        # Check-in never has to search for it. SenseCraft sends no "ip".
+        ip = re.search(r'"ip":"([\d.]+)"', text)
+        if ip and ip.group(1) != camera.ip:
+            camera.ip, camera.checked = ip.group(1), now
+            camera.note = "on WiFi at %s (it said so over USB)" % camera.ip
+            device.log("camera: WiFi stream at http://%s:81/stream" % camera.ip)
+        frame = sensecraft.jpeg(text)       # INVOKE and SAMPLE both carry one
+        if frame:
+            self.frame, self.frame_at = frame, now
+        got = sensecraft.parse_result(text)
+        if got is not None:
+            self._reading(*sensecraft.person(*got), "on %s" % self.port, device)
+
+    def _reading(self, near, score, seen, where, device):
+        """One presence reading, from the USB model or from watch()."""
+        now = time.time()
+        if near != self.near:
+            device.log("presence: %s (camera: %s)" % (
+                "somebody at the box" if near else "nobody at the box", seen))
+        self.near, self.score, self.seen, self.at = near, score, seen, now
+        self.note = "reading " + where
+        # The camera is the backup: the sonar needs two readings, but one
+        # frame sure enough of a person drops the pill on its own.
+        if near and (device.state or {}).get("mode") == "due" and now - self._told > 2:
+            self._told = now
+            device.send({"c": "present", "by": "camera"})
+
+    def watch(self, device):
+        """Person detection on the laptop, from the WiFi camera's stills.
+
+        The model small enough to run on the XIAO scored an empty room as
+        high as a person in it. YOLOX here draws boxes around people and does
+        not: 91% for somebody at the desk, 1-33% for the empty scenes it was
+        tried on. It reads /capture on port 80 - the Check-in stream on port
+        81 is a separate server, so the two do not fight over it.
+        """
+        if cv2 is None or not os.path.exists(YOLOX):
+            self.note = ("camera detection off - " + (
+                "python -m pip install opencv-python-headless" if cv2 is None
+                else "download the model, see README step 6"))
+            device.log("camera: %s" % self.note)
+            return
+        net = cv2.dnn.readNet(YOLOX)
+        while True:
+            ip = camera.ip
+            try:
+                jpg = urllib.request.urlopen("http://%s/capture" % ip, timeout=3).read() if ip else None
+            except OSError:
+                jpg = None
+            if jpg is None:
+                time.sleep(2)
+                continue
+            score = round(person_score(net, jpg) * 100)
+            self._reading(score >= SEEN, score, "a person, %d%% sure" % score if score >= SEEN
+                          else "nobody (%d%%)" % score, "from %s over WiFi" % ip, device)
+            time.sleep(0.1)
+
+
+vision = Vision()
 
 
 class Device:
@@ -292,8 +539,11 @@ class Device:
                 # UART bridge is the same board's other port and also works.
                 "likely": info.vid == ESPRESSIF_VID,
             })
-        # Most likely first, so auto-detect picks well.
-        found.sort(key=lambda item: (not item["likely"], item["port"]))
+        # Most likely first, so auto-detect picks well. The two boards say
+        # which is which in their USB ids: MicroPython on the dispenser is
+        # 303a:4001, the SenseCraft XIAO's built-in USB serial is 303a:1001.
+        # So the dispenser search tries the XIAO last - opening it resets it.
+        found.sort(key=lambda item: (not item["likely"], item["pid"] == XIAO_PID, item["port"]))
         return found
 
     def _pick_port(self):
@@ -306,7 +556,7 @@ class Device:
         """
         if self.wanted_port:
             return self.wanted_port
-        options = [o["port"] for o in self.candidates()]
+        options = [o["port"] for o in self.candidates() if o["port"] != vision.port]
         if not options:
             return None
         fresh = [p for p in options if p not in self._rejected]
@@ -455,6 +705,12 @@ class Device:
                 self.last_frame = time.time()
             elif kind == "hello":
                 self.agent = True
+                # Restart the silence clock. Without this it still holds the
+                # time of the last frame before an unplug or a restart, so the
+                # watchdog below fires within a second of every hello - before
+                # the agent has sent its first state frame - and kicks the
+                # board into a reboot loop that never ends.
+                self.last_frame = time.time()
                 self.log("device: %s, hardware %s" %
                          (msg.get("fw"), msg.get("hw")))
             elif kind == "log":
@@ -521,6 +777,7 @@ class Device:
             "device": self.state,
             "console": list(self.console)[-60:],
             "camera": camera.snapshot(),
+            "vision": vision.snapshot(),
         }
 
 
@@ -599,6 +856,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _stream(self):
+        """The camera's frames as MJPEG, so an <img> plays them live.
+
+        While any viewer is open the model is paused, so frames come as fast
+        as the board can send pictures rather than one per detection. Any
+        number of viewers can watch; they all read the same latest frame.
+        Ends once the camera has sent nothing for ten seconds, or the viewer
+        goes away - and the model resumes once the last one has.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self._cors()
+        self.end_headers()
+        sent, me = 0.0, threading.get_ident()
+        vision.viewers.add(me)          # pauses the model while this is open
+        try:
+            while time.time() - vision.frame_at < 10:
+                if vision.frame and vision.frame_at != sent:
+                    sent, frame = vision.frame_at, vision.frame
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n"
+                                     % len(frame) + frame + b"\r\n")
+                time.sleep(0.05)
+        except OSError:
+            pass            # the viewer closed the page
+        finally:
+            vision.viewers.discard(me)
+
     def log_message(self, fmt, *args):
         pass        # the serial console is the interesting output, not this
 
@@ -616,6 +901,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.device.snapshot())
         if path == "/api/camera":
             return self._json(camera.snapshot())
+        if path == "/api/camera/stream":
+            return self._stream()
         if path == "/api/ports":
             return self._json({"ports": Device.candidates(),
                                "current": self.device.port,
@@ -625,11 +912,13 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             return self._json({"ok": False, "error": "no such endpoint"}, 404)
 
-        # Two front doors, one per audience.
+        # A front door per audience, and one for testing the hardware.
         if path in ("/", "/carer", "/dashboard", "/camera", "/settings"):
             return self._file("index.html")
         if path in ("/patient", "/kiosk"):
             return self._file("patient.html")
+        if path == "/test":
+            return self._file("test.html")
 
         # Everything else comes off disk, so dropping a font or a logo into
         # site/ (or site/app/) just works.
@@ -661,6 +950,16 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": False, "error": "no such endpoint"}, 404)
 
 
+def bridge_running(port):
+    """Is a Kairo bridge already answering on this port?"""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+        conn.request("GET", "/api/hello")
+        return b"kairo-bridge" in conn.getresponse().read(200)
+    except Exception:
+        return False
+
+
 def lan_ip():
     """Best guess at the address a phone on the same WiFi should open."""
     try:
@@ -690,10 +989,23 @@ def main():
         print("    python -m pip install pyserial")
         return 1
 
+    # Before touching any port: another bridge already running is the most
+    # common reason nothing works - it holds both boards' ports, and on
+    # Windows this one could even bind 9000 alongside it and split the page.
+    if bridge_running(args.http):
+        print("A Kairo bridge is already running on port %d." % args.http)
+        print("Close it first (Ctrl-C in its window), or if you cannot find it:")
+        print("  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*bridge.py*' }"
+              " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+        return 1
+
     device = Device(port=args.port, enabled=not args.no_serial,
                     logfile=args.log)
     Handler.device = device
     device.start()
+    if device.enabled and serial is not None:
+        threading.Thread(target=vision.run, args=(device,), daemon=True).start()
+    threading.Thread(target=vision.watch, args=(device,), daemon=True).start()
 
     # Binding 0.0.0.0 succeeds even when something else already holds
     # 127.0.0.1 on this port - and on Windows the specific bind wins, so

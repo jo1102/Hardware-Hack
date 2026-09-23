@@ -27,17 +27,35 @@ nav.views button{
 nav.views button:hover{color:var(--ink)}
 nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:var(--ink)}
 .top .spacer{flex:1 1 auto}
-.top .clock{font-size:13px;color:var(--dim);letter-spacing:.02em}
-.chip button{color:inherit;opacity:.65}
-.chip button:hover{opacity:1}
-.chip .badge{
-  min-width:17px;height:17px;padding:0 5px;border-radius:9px;display:grid;place-content:center;
-  background:var(--red);color:#2a0000;font-size:10.5px;font-weight:750;
+/* A clock, not a number that happens to be on the page. Mono digits at a
+   fixed width so the header never shifts as the seconds roll, and a colon
+   that blinks once a second the way a bedside clock does. */
+.top .clock{
+  display:inline-flex;align-items:center;gap:1px;
+  font-family:var(--mono);font-size:15px;font-weight:650;letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;
+  color:var(--mint);padding:6px 12px;border-radius:10px;
+  border:1px solid rgba(79,224,189,.24);background:rgba(79,224,189,.06);
+  text-shadow:0 0 14px rgba(79,224,189,.35);
+}
+.top .clock i{font-style:normal;animation:tick 1s step-end infinite}
+@keyframes tick{0%,49%{opacity:1}50%,100%{opacity:.18}}
+@media(prefers-reduced-motion:reduce){.top .clock i{animation:none}}
+/* A phone has its own clock, and a wrapped sticky header ate a quarter of
+   the screen. Logo, chips, then the tabs full width - and it scrolls away. */
+@media(max-width:640px){
+  header.top{position:static;gap:10px;padding:12px 0 10px}
+  .brand > div,.top .clock{display:none}
+  nav.views{order:1;flex:1 0 100%}
+  nav.views button{flex:1}
 }
 
 /* ---------- grid ---------- */
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
-.grid > .card{grid-column:span 12}
+/* Full width unless a span class says otherwise. One class of specificity
+   on purpose: this used to be `.grid > .card`, which outranked `.span5`,
+   so every card on the page was quietly full width. */
+.grid > *{grid-column:span 12}
 .span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}
 .span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}
 @media(max-width:1080px){
@@ -49,47 +67,47 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
 
 /* ==================================================================== *
  * ALERTS — the thing that tells the carer to act
+ * A single line when nothing does, a short worst-first list when
+ * something does. Each row carries the one action that resolves it.
  * ==================================================================== */
-.alerts{grid-column:span 12}
+.alerts{padding:12px 16px}
 .alerts.calm{border-color:rgba(79,224,189,.22)}
 .alerts.hot{border-color:rgba(255,190,85,.4)}
 .alerts.bad{border-color:rgba(255,111,112,.45)}
-.alert-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.alerts-hd{display:flex;align-items:center;gap:10px;min-height:30px}
+.alerts-hd b{font-size:14px;font-weight:620}
+.alerts.calm .alerts-hd b{color:#bff3e6}
+.alerts.calm .alerts-hd b::before{content:"✓";margin-right:9px;color:var(--mint)}
+.alerts .bell{
+  margin-left:auto;padding:5px 10px;border-radius:9px;font-size:12px;color:var(--faint);
+  border:1px solid var(--line);
+}
+.alerts .bell:hover{color:var(--ink)}
+.alerts .bell[aria-pressed="true"]{color:#bff3e6;border-color:rgba(79,224,189,.34)}
+.alert-list{list-style:none;margin:10px 0 2px;padding:0;display:grid;gap:8px}
+.alert-list:empty{display:none}
 .alert{
-  display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:13px;
-  border:1px solid var(--line);background:var(--panel-2);
+  display:flex;align-items:center;gap:12px;padding:9px 10px 9px 12px;border-radius:11px;
+  border:1px solid rgba(255,190,85,.26);border-left:3px solid var(--amber);
+  background:rgba(255,190,85,.05);
 }
-.alert.sev-warn{border-color:rgba(255,190,85,.32);background:rgba(255,190,85,.06)}
-.alert.sev-bad{border-color:rgba(255,111,112,.34);background:rgba(255,111,112,.06)}
+.alert.sev-bad{border-color:rgba(255,111,112,.3);border-left-color:var(--red);background:rgba(255,111,112,.06)}
 .alert .ic{
-  width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-content:center;
-  font-size:16px;background:rgba(255,255,255,.06);
+  width:30px;height:30px;flex:none;border-radius:9px;display:grid;place-content:center;
+  font-size:15px;background:rgba(255,190,85,.16);color:#ffdca6;
 }
-.alert.sev-warn .ic{background:rgba(255,190,85,.16);color:#ffdca6}
 .alert.sev-bad .ic{background:rgba(255,111,112,.16);color:#ffc9c9}
 .alert .tx{flex:1;min-width:0}
-.alert .tx b{display:block;font-size:14px;font-weight:620}
+.alert .tx b{display:block;font-size:13.5px;font-weight:620}
 .alert .tx span{font-size:12.5px;color:var(--faint)}
-.alert .go{display:flex;gap:8px;flex-wrap:wrap;flex:none}
-.calm-note{
-  display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:13px;
-  background:rgba(79,224,189,.06);border:1px solid rgba(79,224,189,.2);
-  font-size:13.5px;color:#bff3e6;
+.alert .when{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.alert .x{
+  width:28px;height:28px;flex:none;border-radius:8px;font-size:18px;line-height:1;color:var(--faint);
 }
-.calm-note .ic{font-size:17px}
-
-/* The refill drawer that an alert opens, inline so the carer never leaves
-   the alert to act on it. */
-.refill{
-  display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;
-  margin-top:10px;padding:14px;border-radius:12px;
-  background:rgba(0,0,0,.3);border:1px solid var(--line);
-}
-.refill .f{width:120px;flex:none}
-.refill .quick{display:flex;gap:7px;flex-wrap:wrap}
+.alert .x:hover{background:rgba(255,255,255,.08);color:var(--ink)}
 
 /* ==================================================================== *
- * HERO — countdown
+ * HERO — countdown, and who is at the box
  * ==================================================================== */
 .hero{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
 .ring{position:relative;width:212px;height:212px;flex:none}
@@ -98,7 +116,7 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
   position:absolute;inset:14px;border-radius:50%;filter:blur(26px);opacity:.4;
   background:var(--mint);transition:background .5s,opacity .5s;
 }
-.ring .face{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.ring .face{position:absolute;inset:26px;display:grid;place-content:center;text-align:center;text-wrap:balance}
 .ring .lab{font-size:10.5px;font-weight:660;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
 .ring .big{font-size:40px;font-weight:660;letter-spacing:-1.6px;line-height:1.04;margin:5px 0 2px}
 .ring .sml{font-size:12.5px;color:var(--dim)}
@@ -118,15 +136,19 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
 .stat .k{font-size:10.5px;font-weight:660;letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
 .stat .v{font-size:27px;font-weight:660;letter-spacing:-1px;margin-top:5px}
 .stat .n{font-size:11.5px;color:var(--faint);margin-top:1px}
-.days{display:flex;gap:4px;align-items:flex-end;margin-top:16px;height:44px}
+/* Columns stretch to the row; each fill is anchored to the bottom inside
+   its own column. (align-items:flex-end here left every column 0px tall,
+   so the chart never drew.) The card is a column so the chart takes up
+   whatever height the Activity card beside it sets. */
+.adh{display:flex;flex-direction:column}
+.days{display:flex;gap:4px;margin-top:16px;min-height:44px;flex:1}
 .days i{flex:1;border-radius:3px;background:rgba(255,255,255,.07);position:relative;min-width:5px}
 .days i b{position:absolute;inset:auto 0 0;border-radius:3px;display:block;transition:height .4s}
-.days-legend{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:7px}
 
 /* ==================================================================== *
  * TUBES
  * ==================================================================== */
-.tubes{grid-column:span 12;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.tubes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 @media(max-width:860px){.tubes{grid-template-columns:1fr}}
 .tube{
   display:flex;gap:16px;padding:18px;
@@ -159,7 +181,7 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
 }
 .glass .ticks{position:absolute;inset:0;pointer-events:none}
 .glass .ticks i{position:absolute;right:0;width:8px;height:1px;background:rgba(255,255,255,.16)}
-.tube .body{flex:1;min-width:0;display:flex;flex-direction:column}
+.tube .body,.tube .view{flex:1;min-width:0;display:flex;flex-direction:column}
 .tube .tn{font-size:10.5px;font-weight:660;letter-spacing:.12em;text-transform:uppercase;color:var(--tc)}
 .tube .name{
   font-size:16.5px;font-weight:620;letter-spacing:-.3px;margin:4px 0 2px;
@@ -180,27 +202,13 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
 .tube .acts{display:flex;gap:7px;margin-top:auto;padding-top:13px;flex-wrap:wrap}
 
 /* ==================================================================== *
- * SCHEDULE EDITOR
+ * TUBE FORMS — refill and schedule, inside the tube's own card
  * ==================================================================== */
-.ed{border-top:1px solid var(--line);padding:15px 0}
-.ed:first-of-type{border-top:0;padding-top:4px}
-.ed .row1{display:flex;gap:11px;align-items:flex-end;flex-wrap:wrap}
-.ed .row1 .f-name{flex:1 1 200px;min-width:150px}
-.ed .row1 .f-dose{width:96px;flex:none}
-.ed .row1 .f-count{width:112px;flex:none}
-.ed .dot{width:9px;height:9px;border-radius:50%;background:var(--tc);margin-bottom:13px;flex:none}
-.times{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:12px}
-.time-chip{
-  display:inline-flex;align-items:center;gap:7px;padding:6px 8px 6px 12px;border-radius:9px;
-  border:1px solid var(--line-2);background:rgba(255,255,255,.05);
-  font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
-}
-.time-chip button{color:var(--faint);font-size:15px;line-height:1;padding:0 2px}
-.time-chip button:hover{color:var(--red)}
-.times input[type=time]{width:118px}
-.ed .save{margin-top:12px;display:flex;gap:9px;align-items:center}
-.ed .saved{font-size:12px;color:var(--mint);opacity:0;transition:opacity .3s}
-.ed .saved.on{opacity:1}
+.tube .form{display:grid;gap:12px;align-content:start;margin-top:10px}
+.tube .form .pair{display:grid;grid-template-columns:minmax(0,1fr) 88px;gap:10px}
+.tube .form .row{display:flex;gap:8px;flex-wrap:wrap}
+.refill-row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.refill-row input{width:92px}
 
 /* ==================================================================== *
  * HARDWARE / LCD PANEL
@@ -245,7 +253,7 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
 /* ==================================================================== *
  * ACTIVITY / CONSOLE
  * ==================================================================== */
-.log{list-style:none;margin:0;padding:0;max-height:340px;overflow:auto}
+.log{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto}
 .log li{display:flex;gap:12px;padding:10px 2px;border-bottom:1px solid rgba(255,255,255,.05)}
 .log li:last-child{border-bottom:0}
 .log .ic{
@@ -281,44 +289,28 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
   border-radius:14px;overflow:hidden;background:#05070a;border:1px solid var(--line);
   display:grid;place-items:center;
 }
-.cam-frame img{width:100%;height:100%;object-fit:cover;display:block}
+.cam-frame img{width:100%;height:100%;object-fit:contain;display:block}
 .cam-off{text-align:center;padding:26px;max-width:44ch}
 .cam-off .eye{font-size:34px;opacity:.5}
 .cam-off h3{margin:12px 0 6px;font-size:16px;font-weight:620}
-.cam-off p{margin:0;color:var(--faint);font-size:13px;line-height:1.6}
 .cam-live-badge{
   position:absolute;top:12px;left:12px;display:flex;align-items:center;gap:7px;
   padding:6px 11px;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);
   font-size:11.5px;font-weight:640;letter-spacing:.08em;text-transform:uppercase;
 }
 .cam-live-badge i{width:7px;height:7px;border-radius:50%;background:var(--red);animation:ping 1.8s infinite}
-.privacy{
-  display:flex;gap:12px;padding:14px;border-radius:12px;margin-top:14px;
-  background:rgba(106,166,255,.06);border:1px solid rgba(106,166,255,.2);
-}
-.privacy .i{font-size:17px;line-height:1}
-.privacy p{margin:0;font-size:12.5px;color:#c6dcff;line-height:1.6}
-.privacy b{color:#e4efff}
 
 /* ==================================================================== *
- * CONNECTION DRAWER
+ * CONNECTION — a native popover, opened from the source chip
+ * The UA centres popovers; this pins it under the right end of the header.
  * ==================================================================== */
 .conn{
-  position:fixed;right:18px;bottom:18px;z-index:60;
-  width:auto;max-width:calc(100vw - 36px);
-  border:1px solid var(--line-2);border-radius:14px;overflow:hidden;
-  background:rgba(10,14,20,.96);backdrop-filter:blur(18px);
+  position:fixed;inset:70px 18px auto auto;margin:0;
+  width:min(370px,calc(100vw - 36px));padding:0 14px 14px;color:var(--ink);
+  border:1px solid var(--line-2);border-radius:14px;
+  background:rgba(10,14,20,.97);backdrop-filter:blur(18px);
   box-shadow:0 26px 60px -26px #000;
 }
-.conn > button.hd{
-  width:100%;display:flex;align-items:center;gap:10px;padding:12px 14px;
-  font-size:13px;font-weight:600;text-align:left;
-}
-.conn .hd .dot{width:8px;height:8px;border-radius:50%;flex:none}
-.conn .hd .ch{margin-left:auto;color:var(--faint);font-size:11px}
-.conn .bd{display:none;padding:0 14px 14px;border-top:1px solid var(--line)}
-.conn.open{width:min(370px,calc(100vw - 36px))}
-.conn.open .bd{display:block}
 .conn .seg{
   display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:11px;
   background:var(--panel-2);margin:14px 0 12px;
@@ -334,3 +326,71 @@ nav.views button[aria-current="true"]{background:rgba(255,255,255,.085);color:va
   padding:4px 0;border-top:1px solid rgba(255,255,255,.05);
 }
 .conn .kv span:last-child{color:var(--dim);font-family:var(--mono)}
+
+
+/* ==================================================================== *
+ * PRESENCE — the right-hand third of the hero
+ * One panel for two very different sensors. The reading is shown as well
+ * as the verdict, because "42 cm" is what tells you the thing is actually
+ * working - a green dot only tells you the code ran.
+ * ==================================================================== */
+.pres{
+  flex:1 1 300px;max-width:400px;padding:16px;border-radius:14px;
+  background:rgba(0,0,0,.22);border:1px solid var(--line);
+  transition:border-color .3s,background .3s;
+}
+@media(max-width:1080px){.pres{max-width:none}}
+.pres.near{border-color:rgba(79,224,189,.38);background:rgba(79,224,189,.05)}
+.pres-hd{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;
+  font-size:10.5px;font-weight:660;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);
+}
+.pres-hd .chip{padding:3px 9px;font-size:11.5px;letter-spacing:0;text-transform:none}
+.pres-now{display:flex;align-items:center;gap:14px}
+.pres .ic{
+  width:44px;height:44px;flex:none;border-radius:12px;display:grid;place-content:center;
+  font-size:19px;background:rgba(255,255,255,.05);color:var(--faint);
+  transition:background .3s,color .3s;
+}
+.pres .tx{flex:1;min-width:0}
+.pres .tx b{display:block;font-size:15px;font-weight:620}
+.pres .tx span{font-size:12px;color:var(--faint)}
+.pres .read{text-align:right;line-height:1.1}
+.pres .read .v{font-size:26px;font-weight:660;letter-spacing:-.8px}
+.pres .read .u{display:block;font-size:11px;color:var(--faint)}
+.pres.near .ic{background:rgba(79,224,189,.16);color:var(--mint)}
+
+/* Distance as a bar, with the "close enough" line drawn on it, so the
+   threshold is a place on a scale instead of a number in a settings page. */
+.pres-bar{
+  position:relative;height:9px;margin-top:16px;border-radius:5px;overflow:hidden;
+  background:rgba(255,255,255,.06);border:1px solid var(--line);
+}
+.pres-bar i{
+  position:absolute;inset:0 auto 0 0;display:block;border-radius:5px;
+  background:linear-gradient(90deg,var(--mint),var(--blue));
+  transition:width .35s ease,background .3s;
+}
+.pres-bar b{
+  position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--amber);
+  box-shadow:0 0 7px var(--amber);border-radius:2px;
+}
+.pres-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:6px}
+
+/* ==================================================================== *
+ * SETTINGS ODDMENTS
+ * ==================================================================== */
+.seg-row{
+  display:flex;gap:2px;padding:3px;border:1px solid var(--line);
+  border-radius:11px;background:var(--panel-2);
+}
+.seg-row button{flex:1;padding:8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--dim)}
+.seg-row button:hover{color:var(--ink)}
+.seg-row button[aria-current=true]{background:rgba(255,255,255,.09);color:var(--ink)}
+form.card .fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 12px;margin-bottom:16px}
+form.card .wide{grid-column:1/-1}
+form.card .u{display:block;font-size:11.5px;color:var(--faint);margin-top:5px}
+@media(max-width:520px){form.card .fields{grid-template-columns:1fr 1fr}}
+
+/* Bottom right, clear of the sticky header. */
+.toasts{inset:auto 18px 18px auto;transform:none}
